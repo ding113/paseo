@@ -185,7 +185,7 @@ export interface DispatchComposerAgentMessageInput {
    * Rewrites the text that goes on the wire, leaving the local echo alone. Defaults to
    * the translation runtime, which is a pass-through until translation is configured.
    */
-  translate?: (text: string) => Promise<string>;
+  translate?: (text: string, clientMessageId: string) => Promise<string>;
 }
 
 export async function dispatchComposerAgentMessage(
@@ -209,7 +209,7 @@ export async function dispatchComposerAgentMessage(
   input.submission.begin(input.agentId, userMessage);
   try {
     const imagesData = await input.encodeImages(wirePayload.images);
-    const wireText = await (input.translate ?? translateComposerInput)(input.text);
+    const wireText = await (input.translate ?? translateComposerInput)(input.text, clientMessageId);
     await input.client.sendAgentMessage(input.agentId, wireText, {
       messageId: clientMessageId,
       ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),

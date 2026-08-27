@@ -26,11 +26,20 @@ export type TranslationStatus = "failed";
 interface TranslationState {
   entries: Record<string, string>;
   status: Record<string, TranslationStatus>;
+  /**
+   * What the user typed, keyed by the prompt's `clientMessageId`.
+   *
+   * Keyed by identity rather than by the wire text: two different prompts can translate to
+   * the same string, and a text-keyed map would let the second overwrite the first, so one
+   * message would render another's words.
+   */
+  originals: Record<string, string>;
 }
 
 export const useTranslationStore = create<TranslationState>()(() => ({
   entries: {},
   status: {},
+  originals: {},
 }));
 
 interface QueuedJob {
@@ -47,8 +56,24 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
  * Kept in sync from React by `useTranslationRuntimeSync`. The queue runs outside React, so
  * it reads the config from here rather than from a hook.
  */
+function configFingerprint(value: TranslationConfig): string {
+  return [value.baseUrl, value.apiKey, value.model, value.myLanguage, value.agentLanguage].join(
+    "\u0000",
+  );
+}
+
 export function setTranslationConfig(next: TranslationConfig): void {
+  const previous = config;
   config = next;
+  // Failures are sticky for the session, so correcting a bad endpoint, key, or model has to
+  // retire them. Otherwise every message that failed under the old settings stays
+  // untranslated until the app restarts.
+  if (configFingerprint(previous) !== configFingerprint(next)) {
+    const { status } = useTranslationStore.getState();
+    if (Object.keys(status).length > 0) {
+      useTranslationStore.setState({ status: {} });
+    }
+  }
 }
 
 export function getTranslationConfig(): TranslationConfig {
@@ -231,26 +256,41 @@ export async function translateNow(text: string, targetLanguage: string): Promis
   }
 }
 
-function seedTranslation(targetLanguage: string, text: string, translated: string): void {
-  translationCache.set(targetLanguage, text, translated);
-  commitEntries({ [entryKey(targetLanguage, text)]: translated });
-}
-
 /**
  * Translate composer input into the agent's language and return what should go on the wire.
  *
- * It also seeds the reverse direction. The daemon echoes back a canonical `user_message`
- * containing the text it received — the translation — which would otherwise replace the
- * optimistic row and show the user a translation of their own words. Registering the
- * original as the translation of the wire text makes that echo render as what they typed,
- * with no message-id bookkeeping anywhere.
+ * The original is recorded against the prompt's `clientMessageId`. The daemon echoes back a
+ * canonical `user_message` holding the text it received — the translation — which replaces
+ * the optimistic row; without this the user would read a translation of their own words.
  */
-export async function translateComposerInput(text: string): Promise<string> {
+export async function translateComposerInput(
+  text: string,
+  clientMessageId: string,
+): Promise<string> {
   const wireText = await translateNow(text, config.agentLanguage);
   if (wireText !== text) {
-    seedTranslation(config.myLanguage, wireText, text);
+    useTranslationStore.setState((current) => ({
+      originals: { ...current.originals, [clientMessageId]: text },
+    }));
   }
   return wireText;
+}
+
+export function selectPromptOriginal(
+  state: TranslationState,
+  clientMessageId: string | undefined,
+): string | undefined {
+  return clientMessageId === undefined ? undefined : state.originals[clientMessageId];
+}
+
+/**
+ * The reader-language translation of `text` if one is already known, else `text`.
+ *
+ * Synchronous and request-free, for non-React callers such as the copy action, which must
+ * put on the clipboard exactly what the reader sees.
+ */
+export function translateForReaderSync(text: string): string {
+  return lookupTranslation(text, config.myLanguage) ?? text;
 }
 
 export function selectTranslation(
@@ -267,5 +307,5 @@ export function resetTranslationStoreForTest(): void {
   flushTimer = null;
   queue = new Map();
   config = DEFAULT_TRANSLATION_CONFIG;
-  useTranslationStore.setState({ entries: {}, status: {} }, true);
+  useTranslationStore.setState({ entries: {}, status: {}, originals: {} }, true);
 }

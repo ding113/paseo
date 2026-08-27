@@ -83,6 +83,38 @@ function resolveEndpoint(baseUrl: string): string {
  */
 const SAMPLING = { temperature: 0.7, top_p: 1.0 } as const;
 
+/**
+ * Deadline for one translation request.
+ *
+ * Composer input is translated on the send path, so a socket that connects and then goes
+ * quiet would otherwise hold the prompt forever: the optimistic bubble stays pending and
+ * the agent never receives anything, because the send-the-original fallback is downstream
+ * of this await. A bounded request turns that hang into the fallback.
+ */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/** Aborts on our deadline or on the caller's signal, whichever comes first. */
+function withDeadline(signal: AbortSignal | undefined): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () =>
+      controller.abort(new Error(`Translation request timed out after ${REQUEST_TIMEOUT_MS}ms`)),
+    REQUEST_TIMEOUT_MS,
+  );
+  const forward = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", forward);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", forward);
+    },
+  };
+}
+
 async function translateOne(input: {
   text: string;
   language: TranslationLanguage;
@@ -95,26 +127,42 @@ async function translateOne(input: {
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
-  const response = await fetch(resolveEndpoint(input.config.baseUrl), {
-    method: "POST",
-    headers,
-    ...(input.signal ? { signal: input.signal } : {}),
-    body: JSON.stringify({
-      model: input.config.model.trim(),
-      ...SAMPLING,
-      // The model card states these models have no default system prompt, so the whole
-      // instruction is the single user turn.
-      messages: [{ role: "user", content: buildPrompt(input.language, input.text) }],
-    }),
-  });
+  const deadline = withDeadline(input.signal);
+  let response: Response;
+  try {
+    response = await fetch(resolveEndpoint(input.config.baseUrl), {
+      method: "POST",
+      headers,
+      signal: deadline.signal,
+      body: JSON.stringify({
+        model: input.config.model.trim(),
+        ...SAMPLING,
+        // The model card states these models have no default system prompt, so the whole
+        // instruction is the single user turn.
+        messages: [{ role: "user", content: buildPrompt(input.language, input.text) }],
+      }),
+    });
+  } finally {
+    deadline.dispose();
+  }
 
   if (!response.ok) {
     throw new Error(`Translation request failed: ${response.status} ${response.statusText}`);
   }
 
   const body: unknown = await response.json();
-  const content = (body as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]
-    ?.message?.content;
+  const choice = (
+    body as {
+      choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>;
+    }
+  ).choices?.[0];
+  // A provider that stops at its output limit still returns usable-looking prose. Accepting
+  // it would cache a fragment as the finished translation and silently drop the rest of the
+  // message; failing here leaves the original on screen instead.
+  if (choice?.finish_reason === "length") {
+    throw new Error("Translation response was truncated at the model's output limit");
+  }
+  const content = choice?.message?.content;
   if (typeof content !== "string") {
     throw new Error("Translation response had no message content");
   }

@@ -3,8 +3,8 @@ import { useSettings } from "@/hooks/use-settings";
 import { isTranslationConfigured, type TranslationConfig } from "./client";
 import { translationCache } from "./cache";
 import {
-  lookupTranslation,
   requestTranslation,
+  selectPromptOriginal,
   selectTranslation,
   setTranslationConfig,
   useTranslationStore,
@@ -28,9 +28,12 @@ export function useIsTranslationEnabled(): boolean {
 export function useTranslationRuntimeSync(): void {
   const config = useTranslationConfig();
 
-  useEffect(() => {
-    setTranslationConfig(config);
-  }, [config]);
+  // Published during render, not in an effect. Consumers call `requestTranslation` while
+  // rendering, and this provider renders before them; deferring to an effect would let a
+  // whole tree ask under the previous config, and since the queue reads a module variable,
+  // updating it afterwards re-renders nothing — those messages would stay untranslated
+  // until some unrelated state change. The call is idempotent, so repeating it is free.
+  setTranslationConfig(config);
 
   useEffect(() => {
     void translationCache.hydrate();
@@ -71,17 +74,13 @@ export function useReaderText(text: string): string {
 }
 
 /**
- * What the user originally typed for a prompt that was translated on the way out, or
- * `undefined` if this text was never translated here. Never issues a request.
+ * What the user typed for a prompt that was translated on the way out.
+ *
+ * Deliberately not gated on whether translation is enabled: this is a local lookup of an
+ * already-recorded original, with no request behind it. Gating it would make turning
+ * translation off rewrite existing user bubbles, their copy payload, and their rewind text
+ * into the agent-language wire text.
  */
-export function useOriginalUserText(text: string | null | undefined): string | undefined {
-  const config = useTranslationConfig();
-  const enabled = useIsTranslationEnabled();
-  const stored = useTranslationStore((state) =>
-    text ? selectTranslation(state, text, config.myLanguage) : undefined,
-  );
-
-  if (!enabled || !text) return undefined;
-  if (stored !== undefined) return stored;
-  return lookupTranslation(text, config.myLanguage);
+export function useOriginalUserText(clientMessageId: string | undefined): string | undefined {
+  return useTranslationStore((state) => selectPromptOriginal(state, clientMessageId));
 }

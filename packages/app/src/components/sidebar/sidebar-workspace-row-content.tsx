@@ -123,9 +123,12 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   const {
     settings: { workspaceTitleSource },
   } = useAppSettings();
-  // Only the name is translated. In "branch" mode the label is a git ref, which has to stay
-  // exactly what git calls it.
-  const translatedName = useTranslatedForReader(workspace.name);
+  // Only the name is translated, and only when the row actually shows it. In "branch" mode
+  // with a checked-out branch the label is a git ref, so requesting a translation would be a
+  // paid round trip — and would disclose the name to the endpoint — for a string never
+  // rendered.
+  const showsWorkspaceName = workspaceTitleSource !== "branch" || !workspace.currentBranch;
+  const translatedName = useTranslatedForReader(showsWorkspaceName ? workspace.name : null);
   const labelSource = useMemo(
     () => (translatedName === undefined ? workspace : { ...workspace, name: translatedName }),
     [translatedName, workspace],

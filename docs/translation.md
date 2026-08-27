@@ -34,11 +34,17 @@ which is asked to repeat such a segment unchanged.
 ## Code is excluded structurally, not by prompt
 
 `splitMarkdownBlocks` keeps a fenced block whole — the blank lines inside a fence are
-structural. So a message splits into blocks that are each entirely prose or entirely code,
-and excluding code is a check on the block (`translation/segments.ts`) rather than a
-masking pass over prose. Inline code, paths, URLs, and command names inside prose are
-covered by the system prompt only; if a model starts rewriting those, that is when a
-mask/restore pass earns its keep.
+structural. So a message splits into blocks, and excluding code is a check on the block
+(`translation/segments.ts`) rather than a masking pass over prose.
+
+That check parses the block instead of reading its first characters. A fence nested under a
+list item or a blockquote starts with `-`, `*`, or `>`, so a prefix test hands that code to
+the model. A block holding code anywhere is skipped whole, which can leave a list's prose
+untranslated: preserving code verbatim is the contract, translating prose is not.
+
+Inline code, paths, URLs, and command names inside prose are covered by the prompt only. In
+practice the model does honour it — identifiers like `reducer` come back untouched — but if
+one starts rewriting them, that is when a mask/restore pass earns its keep.
 
 ## Only settled text is translated
 
@@ -54,11 +60,16 @@ blocks issues its calls in one concurrent burst rather than a trickle.
 
 The daemon echoes a canonical `user_message` containing the text it received — the
 translation. Left alone, that replaces the optimistic row and shows the user a translation
-of their own prompt. Instead, sending a prompt seeds the reverse mapping: the original is
-registered as the translation of the wire text. The echo then renders as what they typed,
-and no message-id bookkeeping is needed anywhere. `UserMessage` looks that up but never
-requests one — a miss means the text was never translated here, and paying for a round trip
-to render someone's own words back at them is not worth it.
+of their own prompt. Sending a prompt therefore records the original under its
+`clientMessageId`, which the daemon echoes back, and `UserMessage` renders that.
+
+Keyed by identity, not by the wire text. Two different prompts can translate to the same
+string, and a text-keyed map lets the second overwrite the first — one message would then
+render another's words in its bubble, its copy payload, and its rewind text.
+
+The lookup is not gated on whether translation is enabled: it is a local read of something
+already recorded, with no request behind it. Gating it would make switching translation off
+rewrite every existing user bubble into agent-language wire text.
 
 ## The prompt is the model card's, verbatim
 
@@ -80,6 +91,12 @@ Three consequences fall out of that instruction, and none of them are negotiable
   `en`. `translation/languages.ts` holds the card's table and maps Paseo's BCP-47 tags
   (`zh-CN`, `pt-BR`) onto the abbreviations it lists.
 
+A supported language is not automatically a working one. Hy-MT2 lists `繁体中文`, but the
+Tencent provider on OpenRouter answers that target with `content: null` and counts its whole
+output as reasoning tokens, while `中文` and `English` work — so Traditional Chinese falls back
+to the original text there. Check a target end to end before assuming the card's table
+matches your provider.
+
 Sampling follows the card's 30B-A3B block. Its `top_k: -1` and `repetition_penalty: 1.0` are
 "disabled" values, so they are omitted rather than sent: they change nothing, they are not
 in the OpenAI schema, and some gateways reject a negative `top_k`.
@@ -87,9 +104,21 @@ in the OpenAI schema, and some gateways reject a negative `top_k`.
 ## Failure is always a fallback, never a block
 
 A failed translation renders the original. A failed _input_ translation sends the original
-rather than throwing: a flaky endpoint must not stop someone from talking to their agent. A
-failed job stays failed for the session, because retrying on every render turns a bad
-endpoint into an unbounded request loop.
+rather than throwing: a flaky endpoint must not stop someone from talking to their agent.
+
+Every request carries a 30s deadline. Composer input is translated on the send path, so an
+endpoint that connects and then goes quiet would otherwise pin the prompt open forever — the
+bubble stays pending and the agent receives nothing, because the fallback is downstream of
+that await.
+
+A completion that stopped at the provider's output limit (`finish_reason: "length"`) is
+rejected rather than cached. Partial prose looks like a finished translation and would
+silently drop the rest of the message.
+
+A failed job stays failed for the session, because retrying on every render turns a bad
+endpoint into an unbounded request loop. Changing the endpoint, key, model, or either
+language retires those failures — otherwise correcting a typo leaves everything it broke
+untranslated until restart.
 
 ## Not covered
 
@@ -101,4 +130,7 @@ also has to handle `AgentPromptContentBlock[]` and skip `<paseo-system>` envelop
 
 Workspace names are translated in the sidebar and the workspace header, but not in the
 Command Center: it is a search surface, and translating the label without also matching the
-original would break lookup by the name the user knows.
+original would break lookup by the name the user knows. The sidebar only requests a name it
+will actually show — under `workspaceTitleSource: "branch"` with a checked-out branch the
+label is a git ref, and requesting a translation would be a paid round trip, and a
+disclosure of the name to the endpoint, for a string never rendered.

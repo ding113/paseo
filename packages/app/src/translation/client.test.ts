@@ -31,6 +31,14 @@ function stubFetch(...contents: string[]) {
   return fetchMock;
 }
 
+/** A fetch that never resolves, rejecting only when its request is aborted. */
+function neverResponds(_url: string, init?: RequestInit): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    const fail = () => reject(init?.signal?.reason ?? new Error("aborted"));
+    init?.signal?.addEventListener("abort", fail);
+  });
+}
+
 function bodyOf(call: [string, RequestInit?] | undefined): Record<string, unknown> {
   return JSON.parse(String(call?.[1]?.body ?? "{}"));
 }
@@ -63,6 +71,14 @@ describe("Hy-MT2 prompt", () => {
   it("maps the app's locale tags onto the model card's abbreviations", () => {
     expect(buildTranslationPrompt("zh-CN", "x")).toBe(buildTranslationPrompt("zh", "x"));
     expect(buildTranslationPrompt("pt-BR", "x")).toBe(buildTranslationPrompt("pt", "x"));
+  });
+
+  it("resolves the Traditional Chinese locale aliases", () => {
+    // Regression: the alias value is cased like the model card (`zh-Hant`) while the input
+    // was lowercased, so these resolved to nothing and silently disabled the whole feature.
+    expect(buildTranslationPrompt("zh-TW", "x")).toContain("翻译为 繁体中文，");
+    expect(buildTranslationPrompt("zh-HK", "x")).toContain("翻译为 繁体中文，");
+    expect(isTranslationConfigured({ ...config, myLanguage: "zh-TW" })).toBe(true);
   });
 
   it("rejects a language the model card does not list", () => {
@@ -133,6 +149,39 @@ describe("translateSegments", () => {
     await expect(
       translateSegments({ segments: ["Hello"], targetLanguage: "zh", config }),
     ).rejects.toThrow(/401/);
+  });
+
+  it("rejects a completion truncated at the output limit", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            json: async () => ({
+              choices: [{ message: { content: "这是一段被截断的" }, finish_reason: "length" }],
+            }),
+          }) as Response,
+      ),
+    );
+    await expect(
+      translateSegments({ segments: ["Hello"], targetLanguage: "zh", config }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  it("gives up on a request that never responds", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("fetch", vi.fn(neverResponds));
+      const pending = translateSegments({ segments: ["Hello"], targetLanguage: "zh", config });
+      const assertion = expect(pending).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("throws on an empty completion rather than blanking the message", async () => {

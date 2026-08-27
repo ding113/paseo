@@ -66,7 +66,10 @@ const ALIASES: Record<string, string> = {
 export function resolveTranslationLanguage(value: string): TranslationLanguage | undefined {
   const normalized = value.trim().toLowerCase();
   if (normalized.length === 0) return undefined;
-  const code = ALIASES[normalized] ?? normalized;
+  // Lowercase after the alias lookup, not before: the alias values are cased like the model
+  // card (`zh-Hant`), so comparing them raw against a lowercased code never matches and
+  // silently reports the language as unsupported.
+  const code = (ALIASES[normalized] ?? normalized).toLowerCase();
   return TRANSLATION_LANGUAGES.find((language) => language.code.toLowerCase() === code);
 }
 

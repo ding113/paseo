@@ -125,6 +125,8 @@ interface UserMessageProps {
   serverId?: string;
   agentId?: string;
   messageId?: string;
+  /** Identity of a prompt this client sent, used to recover the pre-translation text. */
+  clientMessageId?: string;
   message: string;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
@@ -426,6 +428,7 @@ export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
   messageId,
+  clientMessageId,
   message,
   images = [],
   attachments = [],
@@ -446,7 +449,7 @@ export const UserMessage = memo(function UserMessage({
   // `message` is what the agent received. When the prompt was translated on the way out,
   // that is not what the user typed, and the daemon's canonical echo replaced the
   // optimistic row holding the original. Display, copy, and rewind all want the original.
-  const displayMessage = useOriginalUserText(message) ?? message;
+  const displayMessage = useOriginalUserText(clientMessageId) ?? message;
   const hasText = message.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;

@@ -1,4 +1,7 @@
+import MarkdownIt from "markdown-it";
 import { splitMarkdownBlocks } from "@/utils/split-markdown-blocks";
+
+const codeBlockParser = new MarkdownIt();
 
 export interface TextPart {
   text: string;
@@ -7,14 +10,19 @@ export interface TextPart {
 }
 
 /**
- * A Markdown block that is a fenced or indented code block.
+ * Whether a Markdown block contains code that must not be translated.
  *
- * `splitMarkdownBlocks` keeps a fence whole — the blank lines inside it are structural —
- * so excluding code from translation is this check rather than a masking pass over prose.
+ * `splitMarkdownBlocks` keeps a fence whole — the blank lines inside it are structural — so
+ * excluding code is a property of the block rather than a masking pass over prose. The test
+ * is on the *parsed* block, not its first characters: a fence nested under a list item or a
+ * blockquote starts with `-`, `*`, or `>`, and a prefix check would hand that code to the
+ * model. Any block holding code is skipped whole, which can leave a list's prose
+ * untranslated — preserving code verbatim is the contract, translating prose is not.
  */
 export function isCodeBlock(text: string): boolean {
-  const trimmed = text.trimStart();
-  return trimmed.startsWith("```") || trimmed.startsWith("~~~") || /^ {4}\S/.test(text);
+  return codeBlockParser
+    .parse(text, {})
+    .some((token) => token.type === "fence" || token.type === "code_block");
 }
 
 /** Split a message into alternating prose and code parts, in order. */
