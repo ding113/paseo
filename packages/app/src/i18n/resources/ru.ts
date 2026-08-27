@@ -1875,7 +1875,42 @@ export const ru: TranslationResources = {
       saveAccessibility: "Сохранить комментарий к ревью",
     },
   },
+  translation: {
+    showOriginal: "Показать оригинал",
+    hideOriginal: "Скрыть оригинал",
+  },
   settings: {
+    translation: {
+      title: "Перевод",
+      enabled: "Переводить сообщения",
+      enabledHint:
+        "Переводит ответы агента на ваш язык, а ваши сообщения — на язык агента перед отправкой.",
+      myLanguage: {
+        label: "Ваш язык",
+        hint: "Ответы и названия агента переводятся на этот язык.",
+        placeholder: "zh",
+      },
+      agentLanguage: {
+        label: "Язык агента",
+        hint: "Ваши сообщения переводятся на этот язык перед отправкой.",
+        placeholder: "en",
+      },
+      baseUrl: {
+        label: "Базовый URL API",
+        hint: "Корень эндпоинта, совместимого с OpenAI.",
+        placeholder: "https://api.openai.com/v1",
+      },
+      apiKey: {
+        label: "Ключ API",
+        hint: "Хранится только на этом устройстве.",
+        placeholder: "sk-...",
+      },
+      model: {
+        label: "Модель",
+        hint: "Модель, используемая для перевода.",
+        placeholder: "gpt-4o-mini",
+      },
+    },
     title: "Настройки",
     loading: "Загрузка настроек...",
     groups: {
@@ -1898,6 +1933,7 @@ export const ru: TranslationResources = {
     sections: {
       general: "Основные",
       appearance: "Оформление",
+      translation: "Перевод",
       layout: en.settings.sections.layout,
       editor: "Редактор",
       shortcuts: "Сочетания клавиш",

@@ -1854,7 +1854,42 @@ export const en = {
       saveAccessibility: "Save review comment",
     },
   },
+  translation: {
+    showOriginal: "Show original",
+    hideOriginal: "Hide original",
+  },
   settings: {
+    translation: {
+      title: "Translation",
+      enabled: "Translate messages",
+      enabledHint:
+        "Translate agent replies into your language, and your prompts into the agent's language before sending.",
+      myLanguage: {
+        label: "Your language",
+        hint: "Agent replies and names are translated into this language.",
+        placeholder: "zh",
+      },
+      agentLanguage: {
+        label: "Agent language",
+        hint: "Your prompts are translated into this language before they are sent.",
+        placeholder: "en",
+      },
+      baseUrl: {
+        label: "API base URL",
+        hint: "Root of an OpenAI-compatible endpoint.",
+        placeholder: "https://api.openai.com/v1",
+      },
+      apiKey: {
+        label: "API key",
+        hint: "Stored on this device only.",
+        placeholder: "sk-...",
+      },
+      model: {
+        label: "Model",
+        hint: "The model used for translation.",
+        placeholder: "gpt-4o-mini",
+      },
+    },
     title: "Settings",
     loading: "Loading settings...",
     groups: {
@@ -1877,6 +1912,7 @@ export const en = {
     sections: {
       general: "General",
       appearance: "Appearance",
+      translation: "Translation",
       layout: "Layout",
       editor: "Editor",
       shortcuts: "Shortcuts",

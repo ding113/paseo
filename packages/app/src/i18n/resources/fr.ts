@@ -1895,7 +1895,42 @@ export const fr: TranslationResources = {
       saveAccessibility: "Enregistrer le commentaire de l'avis",
     },
   },
+  translation: {
+    showOriginal: "Afficher l'original",
+    hideOriginal: "Masquer l'original",
+  },
   settings: {
+    translation: {
+      title: "Traduction",
+      enabled: "Traduire les messages",
+      enabledHint:
+        "Traduit les réponses de l'agent dans votre langue et vos messages dans la langue de l'agent avant l'envoi.",
+      myLanguage: {
+        label: "Votre langue",
+        hint: "Les réponses et les noms de l'agent sont traduits dans cette langue.",
+        placeholder: "zh",
+      },
+      agentLanguage: {
+        label: "Langue de l'agent",
+        hint: "Vos messages sont traduits dans cette langue avant d'être envoyés.",
+        placeholder: "en",
+      },
+      baseUrl: {
+        label: "URL de base de l'API",
+        hint: "Racine d'un endpoint compatible OpenAI.",
+        placeholder: "https://api.openai.com/v1",
+      },
+      apiKey: {
+        label: "Clé d'API",
+        hint: "Stockée uniquement sur cet appareil.",
+        placeholder: "sk-...",
+      },
+      model: {
+        label: "Modèle",
+        hint: "Le modèle utilisé pour la traduction.",
+        placeholder: "gpt-4o-mini",
+      },
+    },
     title: "Paramètres",
     loading: "Chargement des paramètres...",
     groups: {
@@ -1918,6 +1953,7 @@ export const fr: TranslationResources = {
     sections: {
       general: "Général",
       appearance: "Apparence",
+      translation: "Traduction",
       layout: en.settings.sections.layout,
       editor: "Éditeur",
       shortcuts: "Raccourcis",

@@ -1823,7 +1823,41 @@ export const zhCN: TranslationResources = {
       saveAccessibility: "保存 review 评论",
     },
   },
+  translation: {
+    showOriginal: "显示原文",
+    hideOriginal: "隐藏原文",
+  },
   settings: {
+    translation: {
+      title: "翻译",
+      enabled: "翻译消息",
+      enabledHint: "把 agent 的回复翻译成你的语言，并在发送前把你的输入翻译成 agent 的语言。",
+      myLanguage: {
+        label: "你的语言",
+        hint: "agent 的回复和名称会翻译成这个语言。",
+        placeholder: "zh",
+      },
+      agentLanguage: {
+        label: "Agent 语言",
+        hint: "你的输入会先翻译成这个语言再发送。",
+        placeholder: "en",
+      },
+      baseUrl: {
+        label: "API 基础地址",
+        hint: "OpenAI 兼容接口的根地址。",
+        placeholder: "https://api.openai.com/v1",
+      },
+      apiKey: {
+        label: "API 密钥",
+        hint: "仅保存在本设备。",
+        placeholder: "sk-...",
+      },
+      model: {
+        label: "模型",
+        hint: "用于翻译的模型。",
+        placeholder: "gpt-4o-mini",
+      },
+    },
     title: "设置",
     loading: "正在加载设置...",
     groups: {
@@ -1846,6 +1880,7 @@ export const zhCN: TranslationResources = {
     sections: {
       general: "通用",
       appearance: "外观",
+      translation: "翻译",
       layout: en.settings.sections.layout,
       editor: "编辑器",
       shortcuts: "快捷键",
