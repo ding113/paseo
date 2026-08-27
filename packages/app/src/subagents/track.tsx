@@ -15,6 +15,7 @@ import {
 import type { Theme } from "@/styles/theme";
 import type { SubagentRow } from "./select";
 import type { ArchiveFinishedStatus } from "./use-archive-finished";
+import { useTranslatedForReader } from "@/translation/use-translation";
 import {
   buildSubagentPillPresentation,
   buildSubagentRowPresentationData,
@@ -186,8 +187,15 @@ function SubagentsTrackRow({
   const { t } = useTranslation();
   const isCompact = useIsCompactFormFactor();
   const presentation = useMemo(() => buildRowPresentation(row, serverId), [row, serverId]);
+  const presentation = useMemo(() => buildRowPresentation(row), [row]);
+  // The subtitle is left alone: it carries the provider label, which is a product name.
+  const translatedLabel = useTranslatedForReader(
+    presentation.titleState === "loading" ? null : presentation.label,
+  );
   const displayLabel =
-    presentation.titleState === "loading" ? t("common.states.loading") : presentation.label;
+    presentation.titleState === "loading"
+      ? t("common.states.loading")
+      : (translatedLabel ?? presentation.label);
   const handlePress = useCallback(() => {
     if (row.kind === "provider") {
       onOpenProviderSubagent(row.parentAgentId, row.id);

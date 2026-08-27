@@ -1894,7 +1894,41 @@ export const ar: TranslationResources = {
       saveAccessibility: "حفظ تعليق المراجعة",
     },
   },
+  translation: {
+    showOriginal: "إظهار الأصل",
+    hideOriginal: "إخفاء الأصل",
+  },
   settings: {
+    translation: {
+      title: "الترجمة",
+      enabled: "ترجمة الرسائل",
+      enabledHint: "ترجمة ردود الوكيل إلى لغتك، ورسائلك إلى لغة الوكيل قبل الإرسال.",
+      myLanguage: {
+        label: "لغتك",
+        hint: "تُترجم ردود الوكيل وأسماؤه إلى هذه اللغة.",
+        placeholder: "zh",
+      },
+      agentLanguage: {
+        label: "لغة الوكيل",
+        hint: "تُترجم رسائلك إلى هذه اللغة قبل إرسالها.",
+        placeholder: "en",
+      },
+      baseUrl: {
+        label: "عنوان API الأساسي",
+        hint: "جذر نقطة نهاية متوافقة مع OpenAI.",
+        placeholder: "https://api.openai.com/v1",
+      },
+      apiKey: {
+        label: "مفتاح API",
+        hint: "يُحفظ على هذا الجهاز فقط.",
+        placeholder: "sk-...",
+      },
+      model: {
+        label: "النموذج",
+        hint: "النموذج المستخدم للترجمة.",
+        placeholder: "gpt-4o-mini",
+      },
+    },
     title: "إعدادات",
     loading: "جارٍ تحميل الإعدادات...",
     groups: {
@@ -1917,6 +1951,7 @@ export const ar: TranslationResources = {
     sections: {
       general: "عام",
       appearance: "مظهر",
+      translation: "الترجمة",
       layout: en.settings.sections.layout,
       editor: "المحرر",
       shortcuts: "الاختصارات",

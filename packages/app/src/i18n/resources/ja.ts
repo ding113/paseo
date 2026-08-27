@@ -1912,7 +1912,42 @@ export const ja: TranslationResources = {
       saveAccessibility: "レビューコメントを保存",
     },
   },
+  translation: {
+    showOriginal: "原文を表示",
+    hideOriginal: "原文を隠す",
+  },
   settings: {
+    translation: {
+      title: "翻訳",
+      enabled: "メッセージを翻訳",
+      enabledHint:
+        "エージェントの返答をあなたの言語に、送信前にあなたの入力をエージェントの言語に翻訳します。",
+      myLanguage: {
+        label: "あなたの言語",
+        hint: "エージェントの返答と名前はこの言語に翻訳されます。",
+        placeholder: "zh",
+      },
+      agentLanguage: {
+        label: "エージェントの言語",
+        hint: "あなたの入力は送信前にこの言語へ翻訳されます。",
+        placeholder: "en",
+      },
+      baseUrl: {
+        label: "API ベース URL",
+        hint: "OpenAI 互換エンドポイントのルート。",
+        placeholder: "https://api.openai.com/v1",
+      },
+      apiKey: {
+        label: "API キー",
+        hint: "この端末にのみ保存されます。",
+        placeholder: "sk-...",
+      },
+      model: {
+        label: "モデル",
+        hint: "翻訳に使うモデル。",
+        placeholder: "gpt-4o-mini",
+      },
+    },
     title: "設定",
     loading: "設定を読み込み中...",
     groups: {
@@ -1935,6 +1970,7 @@ export const ja: TranslationResources = {
     sections: {
       general: "一般",
       appearance: "外観",
+      translation: "翻訳",
       layout: en.settings.sections.layout,
       editor: "エディター",
       shortcuts: "ショートカット",

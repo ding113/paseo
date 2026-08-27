@@ -14,6 +14,7 @@ import {
   type SidebarRowItems,
 } from "@/components/sidebar/display-preferences/row-items";
 import { isNative } from "@/constants/platform";
+import { DEFAULT_TRANSLATION_CONFIG, type TranslationConfig } from "@/translation/client";
 import {
   FONT_SIZE,
   PLUGIN_THEME_PREFERENCE,
@@ -92,6 +93,8 @@ export interface AppSettings {
   /** Desktop-only preferences for implicit opens into the ordinary side pane. */
   openInSidePane: OpenInSidePanePreferences;
   pullRequestOpenLocation: PullRequestOpenLocation;
+  /** Machine translation of agent output and composer input. Off until configured. */
+  translation: TranslationConfig;
 }
 
 export type AppSettingsUpdate =
@@ -144,6 +147,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   vimKeybindings: false,
   openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
   pullRequestOpenLocation: "explorer",
+  translation: DEFAULT_TRANSLATION_CONFIG,
 };
 
 export const DEFAULT_APP_SETTINGS: Settings = {
@@ -260,6 +264,16 @@ const StoredAppSettingsSchema = z
         legacyPullRequestsInSidePane: undefined,
       }),
     pullRequestOpenLocation: z.enum(["main", "side", "explorer"]).optional(),
+    translation: z
+      .object({
+        enabled: z.boolean().catch(false),
+        baseUrl: z.string().catch(""),
+        apiKey: z.string().catch(""),
+        model: z.string().catch(""),
+        myLanguage: z.string().catch(DEFAULT_TRANSLATION_CONFIG.myLanguage),
+        agentLanguage: z.string().catch(DEFAULT_TRANSLATION_CONFIG.agentLanguage),
+      })
+      .catch(DEFAULT_TRANSLATION_CONFIG),
     // COMPAT(explorerSidebarRouting): replaced by source-specific side-pane preferences in v0.6.
     openSupportingTabsInSidePanel: z.boolean().optional().catch(undefined),
     // COMPAT(rendererDesktopSettings): these fields used to share this renderer-owned key.

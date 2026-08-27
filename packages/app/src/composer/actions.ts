@@ -17,6 +17,7 @@ import { createUserMessage, generateMessageId, type UserMessageItem } from "@/ty
 import type { MessageSubmissionRejectionOutcome } from "@/composer/submission/model";
 import type { PickedImageAttachmentInput } from "@/hooks/image-attachment-picker";
 import { i18n } from "@/i18n/i18next";
+import { translateComposerInput } from "@/translation/store";
 
 export interface QueuedComposerMessage {
   id: string;
@@ -180,6 +181,11 @@ export interface DispatchComposerAgentMessageInput {
   submission: MessageSubmissionWriter;
   activeTurnBehavior?: ActiveTurnBehavior;
   activeTurnId?: string;
+  /**
+   * Rewrites the text that goes on the wire, leaving the local echo alone. Defaults to
+   * the translation runtime, which is a pass-through until translation is configured.
+   */
+  translate?: (text: string, clientMessageId: string) => Promise<string>;
 }
 
 export async function dispatchComposerAgentMessage(
@@ -199,10 +205,12 @@ export async function dispatchComposerAgentMessage(
       ? { turnId: input.activeTurnId }
       : {}),
   });
+  // The optimistic row above holds what the user typed; only the wire text is translated.
   input.submission.begin(input.agentId, userMessage);
   try {
     const imagesData = await input.encodeImages(wirePayload.images);
-    await input.client.sendAgentMessage(input.agentId, input.text, {
+    const wireText = await (input.translate ?? translateComposerInput)(input.text, clientMessageId);
+    await input.client.sendAgentMessage(input.agentId, wireText, {
       messageId: clientMessageId,
       ...(input.activeTurnBehavior ? { activeTurnBehavior: input.activeTurnBehavior } : {}),
       images: imagesData ?? [],

@@ -19,6 +19,7 @@ import { Buffer } from "buffer";
 import {
   ArrowLeft,
   Settings,
+  Languages,
   Palette,
   Server,
   Network,
@@ -51,6 +52,7 @@ import { ScreenTitle } from "@/components/headers/screen-title";
 import { HeaderIconBadge } from "@/components/headers/header-icon-badge";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import { AppearanceSection } from "@/screens/settings/appearance/appearance-section";
+import { TranslationSection } from "@/screens/settings/translation-section";
 import { LayoutSection } from "@/screens/settings/layout/layout-section";
 import {
   useAppSettings,
@@ -152,6 +154,7 @@ interface SidebarSectionItem {
 const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
   { id: "general", labelKey: "settings.sections.general", icon: Settings },
   { id: "appearance", labelKey: "settings.sections.appearance", icon: Palette },
+  { id: "translation", labelKey: "settings.sections.translation", icon: Languages },
   {
     id: "layout",
     labelKey: "settings.sections.layout",
@@ -1537,6 +1540,8 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
             );
           case "appearance":
             return <AppearanceSection />;
+          case "translation":
+            return <TranslationSection />;
           case "editor":
             return isWeb ? <EditorSection /> : null;
           case "shortcuts":
