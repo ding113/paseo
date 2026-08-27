@@ -69,6 +69,7 @@ import { HighlightedCodeBlock } from "@/components/highlighted-code-block";
 import { MarkdownFenceBlock } from "@/components/markdown/fence";
 import type { MarkdownPhase } from "@/components/markdown/fence/types";
 import { splitMarkdownBlocks } from "@/utils/split-markdown-blocks";
+import { useOriginalUserText, useTranslatedForReader } from "@/translation/use-translation";
 import { useRevealedText } from "@/hooks/use-revealed-text";
 import { colorMarkdownLinkChildren } from "@/components/markdown/link-children";
 import { createAssistantMarkdownParser } from "@/utils/assistant-markdown-parser";
@@ -119,6 +120,8 @@ interface UserMessageProps {
   serverId?: string;
   agentId?: string;
   messageId?: string;
+  /** Identity of a prompt this client sent, used to recover the pre-translation text. */
+  clientMessageId?: string;
   message: string;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
@@ -425,6 +428,7 @@ export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
   messageId,
+  clientMessageId,
   message,
   images = [],
   attachments = [],
@@ -446,6 +450,10 @@ export const UserMessage = memo(function UserMessage({
     [lightboxMetadata],
   );
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
+  // `message` is what the agent received. When the prompt was translated on the way out,
+  // that is not what the user typed, and the daemon's canonical echo replaced the
+  // optimistic row holding the original. Display, copy, and rewind all want the original.
+  const displayMessage = useOriginalUserText(clientMessageId) ?? message;
   const hasText = message.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
@@ -458,7 +466,7 @@ export const UserMessage = memo(function UserMessage({
 
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
-  const getMessageContent = useCallback(() => message, [message]);
+  const getMessageContent = useCallback(() => displayMessage, [displayMessage]);
   const handleRewind = useCallback(
     (input: { mode: RewindMode; rewoundText: string }) => {
       return rewindMutation.rewindAgent(input);
@@ -541,7 +549,7 @@ export const UserMessage = memo(function UserMessage({
           ) : null}
           {hasText ? (
             <Text selectable style={userMessageStylesheet.text}>
-              {message}
+              {displayMessage}
             </Text>
           ) : null}
         </View>
@@ -558,7 +566,7 @@ export const UserMessage = memo(function UserMessage({
               <RewindMenu
                 capabilities={capabilities}
                 isPending={rewindMutation.isPending}
-                rewoundText={message}
+                rewoundText={displayMessage}
                 onRewind={handleRewind}
               />
             ) : null}
@@ -760,6 +768,20 @@ export const assistantMessageStylesheet = StyleSheet.create((theme) => ({
   container: {
     paddingVertical: theme.spacing[3],
     ...(isWeb ? { userSelect: "text" as const } : {}),
+  },
+  originalToggle: {
+    marginTop: theme.spacing[2],
+    alignSelf: "flex-start",
+  },
+  originalToggleLabel: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  originalBody: {
+    marginTop: theme.spacing[2],
+    paddingLeft: theme.spacing[3],
+    borderLeftWidth: 2,
+    borderLeftColor: theme.colors.border,
   },
   containerCompactTop: {
     paddingTop: 0,
@@ -1506,13 +1528,20 @@ export const AssistantMessage = memo(function AssistantMessage({
     [],
   );
   const renderedMessage = useMemo(() => capAssistantMessageForRender(message), [message]);
-  // Paint a paced prefix while the turn is streaming so text arrives at a steady
-  // rate instead of in whatever lumps the daemon's coalescing window produced.
-  const revealedMessage = useRevealedText(renderedMessage.text, phase);
   const fullMessageByteLength = useMemo(
     () => (renderedMessage.capped && phase === "complete" ? getUtf8ByteLength(message) : null),
     [message, phase, renderedMessage.capped],
   );
+  // Only settled blocks are translated. While the turn streams, `message` is a growing
+  // prefix, so translating it would re-request on every coalescing flush and show text
+  // that keeps being rewritten. The capped text is translated, never the full message.
+  const translated = useTranslatedForReader(phase === "complete" ? renderedMessage.text : null);
+  const [isOriginalVisible, setIsOriginalVisible] = useState(false);
+  const handleToggleOriginal = useCallback(() => setIsOriginalVisible((v) => !v), []);
+  const displayedMessage = translated ?? renderedMessage.text;
+  // Paint a paced prefix while the turn is streaming so text arrives at a steady
+  // rate instead of in whatever lumps the daemon's coalescing window produced.
+  const revealedMessage = useRevealedText(displayedMessage, phase);
 
   const fileLinkActions = useAssistantFileLinkActions();
   const handleMarkdownLinkPress = useStableEvent((url: string) => {
@@ -2003,6 +2032,29 @@ export const AssistantMessage = memo(function AssistantMessage({
           {t("agentStream.messageCapped", { bytes: fullMessageByteLength })}
         </Text>
       ) : null}
+      {translated === undefined ? null : (
+        <>
+          <Pressable
+            style={assistantMessageStylesheet.originalToggle}
+            onPress={handleToggleOriginal}
+            accessibilityRole="button"
+          >
+            <Text style={assistantMessageStylesheet.originalToggleLabel}>
+              {isOriginalVisible ? t("translation.hideOriginal") : t("translation.showOriginal")}
+            </Text>
+          </Pressable>
+          {isOriginalVisible ? (
+            <View style={assistantMessageStylesheet.originalBody}>
+              <MemoizedMarkdownBlock
+                text={renderedMessage.text}
+                rules={markdownRules}
+                parser={markdownParser}
+                onLinkPress={handleMarkdownLinkPress}
+              />
+            </View>
+          ) : null}
+        </>
+      )}
     </View>
   );
 });

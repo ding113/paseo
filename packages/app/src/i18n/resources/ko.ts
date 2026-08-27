@@ -1910,7 +1910,41 @@ export const ko: TranslationResources = {
       saveAccessibility: "리뷰 댓글 저장",
     },
   },
+  translation: {
+    showOriginal: "원문 보기",
+    hideOriginal: "원문 숨기기",
+  },
   settings: {
+    translation: {
+      title: "번역",
+      enabled: "메시지 번역",
+      enabledHint: "에이전트 응답을 내 언어로, 보내기 전에 내 입력을 에이전트 언어로 번역합니다.",
+      myLanguage: {
+        label: "내 언어",
+        hint: "에이전트 응답과 이름이 이 언어로 번역됩니다.",
+        placeholder: "zh",
+      },
+      agentLanguage: {
+        label: "에이전트 언어",
+        hint: "입력한 내용은 전송 전에 이 언어로 번역됩니다.",
+        placeholder: "en",
+      },
+      baseUrl: {
+        label: "API 기본 URL",
+        hint: "OpenAI 호환 엔드포인트의 루트입니다.",
+        placeholder: "https://api.openai.com/v1",
+      },
+      apiKey: {
+        label: "API 키",
+        hint: "이 기기에만 저장됩니다.",
+        placeholder: "sk-...",
+      },
+      model: {
+        label: "모델",
+        hint: "번역에 사용할 모델입니다.",
+        placeholder: "gpt-4o-mini",
+      },
+    },
     title: "설정",
     loading: "설정 불러오는 중...",
     groups: {
@@ -1933,6 +1967,7 @@ export const ko: TranslationResources = {
     sections: {
       general: "일반",
       appearance: "모양",
+      translation: "번역",
       layout: en.settings.sections.layout,
       editor: "편집기",
       shortcuts: "단축키",

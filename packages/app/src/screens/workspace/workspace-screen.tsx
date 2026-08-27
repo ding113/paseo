@@ -191,6 +191,7 @@ import { supportsDesktopPaneSplits, useIsCompactFormFactor } from "@/constants/l
 import { getIsElectron, isNative, isWeb } from "@/constants/platform";
 import type { SurfaceBackdrop } from "@/styles/surface-backdrop";
 import { buildHostRootRoute, buildSettingsHostRoute } from "@/utils/host-routes";
+import { useReaderText } from "@/translation/use-translation";
 import { useWorkspaceTerminals } from "@/screens/workspace/terminals/use-workspace-terminals";
 import type { TerminalProfile } from "@getpaseo/protocol/messages";
 import {
@@ -1751,7 +1752,7 @@ function WorkspaceScreenContent({
   });
   const {
     isWorkspaceHeaderLoading,
-    workspaceHeaderTitle,
+    workspaceHeaderTitle: untranslatedWorkspaceHeaderTitle,
     workspaceHeaderSubtitle,
     isWorkspaceHeaderSubtitleDistinct,
     isGitCheckout,
@@ -1760,6 +1761,8 @@ function WorkspaceScreenContent({
     workspace: workspaceDescriptor,
     checkoutState: workspaceHeaderCheckoutState,
   });
+  // The subtitle is the project name, which maps to a directory on disk; leave it alone.
+  const workspaceHeaderTitle = useReaderText(untranslatedWorkspaceHeaderTitle);
   const hasPullRequest = useHasPullRequest({
     serverId: normalizedServerId,
     cwd: workspaceDirectory,

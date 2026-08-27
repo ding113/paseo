@@ -27,6 +27,7 @@ import {
 import { shouldRenderSyncedStatusLoader } from "@/utils/status-loader";
 import { StatusRing } from "@/components/status-ring";
 import { resolveSidebarWorkspacePrimaryLabel } from "@/components/sidebar/sidebar-workspace-title";
+import { useTranslatedForReader } from "@/translation/use-translation";
 import { TrailingActionScrim } from "@/components/ui/trailing-action-scrim";
 import { useWorkspaceLabelDefinitions } from "@/workspace-labels";
 
@@ -122,7 +123,20 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   const {
     settings: { workspaceTitleSource },
   } = useAppSettings();
-  const workspaceLabel = resolveSidebarWorkspacePrimaryLabel({ workspace, workspaceTitleSource });
+  // Only the name is translated, and only when the row actually shows it. In "branch" mode
+  // with a checked-out branch the label is a git ref, so requesting a translation would be a
+  // paid round trip — and would disclose the name to the endpoint — for a string never
+  // rendered.
+  const showsWorkspaceName = workspaceTitleSource !== "branch" || !workspace.currentBranch;
+  const translatedName = useTranslatedForReader(showsWorkspaceName ? workspace.name : null);
+  const labelSource = useMemo(
+    () => (translatedName === undefined ? workspace : { ...workspace, name: translatedName }),
+    [translatedName, workspace],
+  );
+  const workspaceLabel = resolveSidebarWorkspacePrimaryLabel({
+    workspace: labelSource,
+    workspaceTitleSource,
+  });
   // The workspace carries label names; their colors live in its host's catalog, so the row is
   // where the two meet — the meta line is handed finished definitions.
   const labels = useWorkspaceLabelDefinitions(workspace.serverId, workspace.labels);

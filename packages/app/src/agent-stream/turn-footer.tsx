@@ -20,6 +20,7 @@ import type { TurnFooterHost } from "./layout";
 import { AssistantForkMenu } from "@/components/assistant-fork-menu";
 import { SyncedLoader } from "@/components/synced-loader";
 import { useRetainedPanelActive } from "@/components/retained-panel";
+import { translateForReaderSync } from "@/translation/store";
 
 const ThemedSyncedLoader = withUnistyles(SyncedLoader);
 const workingIndicatorColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
@@ -176,7 +177,14 @@ function CompletedTurnFooter({
     () =>
       collectAssistantResponseContentForStreamRenderStrategy({
         strategy,
-        items,
+        // Copy what the reader sees. The renderer swaps a settled assistant block for its
+        // translation, so collecting straight from the stream items would put the original
+        // on the clipboard while the screen shows the translation.
+        items: items.map((item) =>
+          item.kind === "assistant_message"
+            ? { ...item, text: translateForReaderSync(item.text) }
+            : item,
+        ),
         startIndex,
       }),
     [strategy, items, startIndex],

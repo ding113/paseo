@@ -1932,7 +1932,42 @@ export const ptBR: TranslationResources = {
       saveAccessibility: "Salvar comentário de revisão",
     },
   },
+  translation: {
+    showOriginal: "Mostrar original",
+    hideOriginal: "Ocultar original",
+  },
   settings: {
+    translation: {
+      title: "Tradução",
+      enabled: "Traduzir mensagens",
+      enabledHint:
+        "Traduz as respostas do agente para o seu idioma e suas mensagens para o idioma do agente antes de enviar.",
+      myLanguage: {
+        label: "Seu idioma",
+        hint: "Respostas e nomes do agente são traduzidos para este idioma.",
+        placeholder: "zh",
+      },
+      agentLanguage: {
+        label: "Idioma do agente",
+        hint: "Suas mensagens são traduzidas para este idioma antes do envio.",
+        placeholder: "en",
+      },
+      baseUrl: {
+        label: "URL base da API",
+        hint: "Raiz de um endpoint compatível com OpenAI.",
+        placeholder: "https://api.openai.com/v1",
+      },
+      apiKey: {
+        label: "Chave de API",
+        hint: "Armazenada apenas neste dispositivo.",
+        placeholder: "sk-...",
+      },
+      model: {
+        label: "Modelo",
+        hint: "O modelo usado para tradução.",
+        placeholder: "gpt-4o-mini",
+      },
+    },
     title: "Configurações",
     loading: "Carregando configurações...",
     groups: {
@@ -1955,6 +1990,7 @@ export const ptBR: TranslationResources = {
     sections: {
       general: "Geral",
       appearance: "Aparência",
+      translation: "Tradução",
       layout: en.settings.sections.layout,
       editor: "Editor",
       shortcuts: "Atalhos",
