@@ -42,6 +42,49 @@ function makeDeps(
 }
 
 describe("loadAppSettingsFromStorage", () => {
+  it("migrates the legacy empty translation endpoint to the OpenRouter defaults", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({
+          translation: {
+            enabled: false,
+            baseUrl: "",
+            apiKey: "",
+            model: "",
+            myLanguage: "zh",
+            agentLanguage: "en",
+          },
+        }),
+      }),
+    });
+    expect((await loadAppSettingsFromStorage(deps)).translation).toMatchObject({
+      provider: "openai-compatible",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "tencent/hy-mt2-30b-a3b",
+      reasoningEffort: "default",
+    });
+  });
+
+  it("allows a current provider configuration to keep intentionally blank fields", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({
+          translation: {
+            ...DEFAULT_CLIENT_SETTINGS.translation,
+            provider: "anthropic",
+            baseUrl: "",
+            model: "",
+          },
+        }),
+      }),
+    });
+    expect((await loadAppSettingsFromStorage(deps)).translation).toMatchObject({
+      provider: "anthropic",
+      baseUrl: "",
+      model: "",
+    });
+  });
+
   it("preserves a persisted steer send behavior", async () => {
     const deps = makeDeps({
       storage: createInMemoryKeyValueStorage({
@@ -605,12 +648,10 @@ describe("saveAppSettings", () => {
       deps,
     });
 
-    expect(deps.storage.entries.get(APP_SETTINGS_KEY)).toBe(
-      JSON.stringify({
-        ...DEFAULT_CLIENT_SETTINGS,
-        terminalScrollbackLines: 42_000,
-      }),
-    );
+    expect(JSON.parse(deps.storage.entries.get(APP_SETTINGS_KEY) ?? "null")).toEqual({
+      ...DEFAULT_CLIENT_SETTINGS,
+      terminalScrollbackLines: 42_000,
+    });
   });
 
   it("normalizes a legacy cached settings shape before saving", async () => {
