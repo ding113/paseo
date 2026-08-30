@@ -265,14 +265,39 @@ const StoredAppSettingsSchema = z
       }),
     pullRequestOpenLocation: z.enum(["main", "side", "explorer"]).optional(),
     translation: z
-      .object({
-        enabled: z.boolean().catch(false),
-        baseUrl: z.string().catch(""),
-        apiKey: z.string().catch(""),
-        model: z.string().catch(""),
-        myLanguage: z.string().catch(DEFAULT_TRANSLATION_CONFIG.myLanguage),
-        agentLanguage: z.string().catch(DEFAULT_TRANSLATION_CONFIG.agentLanguage),
-      })
+      .preprocess(
+        (value) => {
+          if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+          const stored = value as Record<string, unknown>;
+          const isLegacy = !("provider" in stored) && !("reasoningEffort" in stored);
+          if (!isLegacy) return value;
+          return {
+            ...stored,
+            baseUrl:
+              typeof stored.baseUrl === "string" && stored.baseUrl.trim().length > 0
+                ? stored.baseUrl
+                : DEFAULT_TRANSLATION_CONFIG.baseUrl,
+            model:
+              typeof stored.model === "string" && stored.model.trim().length > 0
+                ? stored.model
+                : DEFAULT_TRANSLATION_CONFIG.model,
+          };
+        },
+        z.object({
+          enabled: z.boolean().catch(false),
+          provider: z
+            .enum(["openai-compatible", "openai", "anthropic", "google"])
+            .catch(DEFAULT_TRANSLATION_CONFIG.provider),
+          baseUrl: z.string().catch(DEFAULT_TRANSLATION_CONFIG.baseUrl),
+          apiKey: z.string().catch(""),
+          model: z.string().catch(DEFAULT_TRANSLATION_CONFIG.model),
+          reasoningEffort: z
+            .enum(["default", "low", "medium", "high"])
+            .catch(DEFAULT_TRANSLATION_CONFIG.reasoningEffort),
+          myLanguage: z.string().catch(DEFAULT_TRANSLATION_CONFIG.myLanguage),
+          agentLanguage: z.string().catch(DEFAULT_TRANSLATION_CONFIG.agentLanguage),
+        }),
+      )
       .catch(DEFAULT_TRANSLATION_CONFIG),
     // COMPAT(explorerSidebarRouting): replaced by source-specific side-pane preferences in v0.6.
     openSupportingTabsInSidePanel: z.boolean().optional().catch(undefined),
