@@ -1,5 +1,5 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { View, Text, Pressable, type PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -12,14 +12,25 @@ import { EditingTextInput as TextInput } from "@/components/ui/text-input";
 import {
   areQuestionsAnswered,
   buildQuestionFormAnswers,
+  buildQuestionFormAnswersForAgent,
   isQuestionAnswered,
+  listQuestionFormTranslatableTexts,
   parseQuestionFormQuestions,
+  projectQuestionFormTranslations,
   questionShowsTextInput,
   resolveDismissLabel,
   shouldSubmitEmptyOnDismiss,
   type QuestionFormQuestion,
   type QuestionOption,
 } from "./question-form-card-core";
+import { isTranslationConfigured } from "@/translation/client";
+import { useTranslationConfig } from "@/translation/use-translation";
+import {
+  requestTranslation,
+  translateTextForAgent,
+  translationEntryKey,
+  useTranslationStore,
+} from "@/translation/store";
 
 interface QuestionFormCardProps {
   permission: PendingPermission;
@@ -28,6 +39,40 @@ interface QuestionFormCardProps {
 }
 
 const IS_WEB = isWeb;
+
+function useTranslatedQuestionForm(questions: QuestionFormQuestion[] | null): {
+  questions: QuestionFormQuestion[] | null;
+  ready: boolean;
+} {
+  const config = useTranslationConfig();
+  const enabled = isTranslationConfigured(config);
+  const entries = useTranslationStore((state) => state.entries);
+  const statuses = useTranslationStore((state) => state.status);
+  const texts = useMemo(
+    () => (questions ? listQuestionFormTranslatableTexts(questions) : []),
+    [questions],
+  );
+
+  useEffect(() => {
+    if (!enabled) return;
+    for (const text of texts) {
+      requestTranslation(text, config.myLanguage, "agent-output");
+    }
+  }, [config.myLanguage, enabled, texts]);
+
+  return useMemo(() => {
+    if (!questions || !enabled) return { questions, ready: true };
+    let ready = true;
+    const translated = projectQuestionFormTranslations(questions, (text) => {
+      const key = translationEntryKey("agent-output", config.myLanguage, text);
+      const status = statuses[key];
+      if (status === "failed") return text;
+      if (status !== "complete") ready = false;
+      return entries[key] ?? text;
+    });
+    return { questions: translated, ready };
+  }, [config.myLanguage, enabled, entries, questions, statuses]);
+}
 
 function getQuestionInputPlaceholder({
   question,
@@ -317,18 +362,9 @@ function QuestionOtherInput({
   );
 }
 
-export function QuestionFormCard({ permission, onRespond, isResponding }: QuestionFormCardProps) {
-  const { theme } = useUnistyles();
-  const { t } = useTranslation();
-  const isMobile = useIsCompactFormFactor();
-  const questions = useMemo(
-    () => parseQuestionFormQuestions(permission.request.input),
-    [permission.request.input],
-  );
-
+function useQuestionFormSelection(questions: QuestionFormQuestion[] | null) {
   const [selections, setSelections] = useState<Record<number, Set<number>>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
-  const [respondingAction, setRespondingAction] = useState<"submit" | "dismiss" | null>(null);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
 
   const toggleOption = useCallback(
@@ -336,11 +372,8 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
       const current = selections[qIndex] ?? new Set<number>();
       const next = new Set(current);
       if (multiSelect) {
-        if (next.has(optIndex)) {
-          next.delete(optIndex);
-        } else {
-          next.add(optIndex);
-        }
+        if (next.has(optIndex)) next.delete(optIndex);
+        else next.add(optIndex);
       } else if (next.has(optIndex)) {
         next.clear();
       } else {
@@ -348,10 +381,10 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
         next.add(optIndex);
       }
 
-      setSelections((prev) => ({ ...prev, [qIndex]: next }));
-      setOtherTexts((prev) => {
-        if (!prev[qIndex]) return prev;
-        const nextTexts = { ...prev };
+      setSelections((previous) => ({ ...previous, [qIndex]: next }));
+      setOtherTexts((previous) => {
+        if (!previous[qIndex]) return previous;
+        const nextTexts = { ...previous };
         delete nextTexts[qIndex];
         return nextTexts;
       });
@@ -364,67 +397,131 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
   );
 
   const setOtherText = useCallback((qIndex: number, text: string) => {
-    setOtherTexts((prev) => ({ ...prev, [qIndex]: text }));
+    setOtherTexts((previous) => ({ ...previous, [qIndex]: text }));
     if (text.length > 0) {
-      setSelections((prev) => {
-        if (!prev[qIndex] || prev[qIndex].size === 0) return prev;
-        return { ...prev, [qIndex]: new Set<number>() };
+      setSelections((previous) => {
+        if (!previous[qIndex] || previous[qIndex].size === 0) return previous;
+        return { ...previous, [qIndex]: new Set<number>() };
       });
     }
   }, []);
 
-  const allAnswered = areQuestionsAnswered(questions, selections, otherTexts);
-  const resolvedActiveQuestionIndex = questions
-    ? Math.min(activeQuestionIndex, questions.length - 1)
-    : 0;
-  const activeQuestion = questions?.[resolvedActiveQuestionIndex];
-  const activeQuestionAnswered = activeQuestion
-    ? isQuestionAnswered(activeQuestion, resolvedActiveQuestionIndex, selections, otherTexts)
-    : false;
-  const isLastQuestion = questions ? resolvedActiveQuestionIndex === questions.length - 1 : true;
+  const selectQuestion = useCallback((index: number) => setActiveQuestionIndex(index), []);
+  return {
+    activeQuestionIndex,
+    otherTexts,
+    selections,
+    selectQuestion,
+    setActiveQuestionIndex,
+    setOtherText,
+    toggleOption,
+  };
+}
+
+function useQuestionFormSubmission({
+  questions,
+  selections,
+  otherTexts,
+  allAnswered,
+  isResponding,
+  permissionInput,
+  onRespond,
+}: {
+  questions: QuestionFormQuestion[] | null;
+  selections: Record<number, Set<number>>;
+  otherTexts: Record<number, string>;
+  allAnswered: boolean;
+  isResponding: boolean;
+  permissionInput: PendingPermission["request"]["input"];
+  onRespond: (response: AgentPermissionResponse) => void;
+}) {
+  const [isPreparingResponse, setIsPreparingResponse] = useState(false);
+  const [respondingAction, setRespondingAction] = useState<"submit" | "dismiss" | null>(null);
+  const isBusy = isResponding || isPreparingResponse || respondingAction !== null;
 
   const handleSubmit = useCallback(() => {
-    if (!questions || !allAnswered || isResponding) return;
+    if (!questions || !allAnswered || isBusy) return;
     setRespondingAction("submit");
-    onRespond({
-      behavior: "allow",
-      updatedInput: {
-        ...permission.request.input,
-        answers: buildQuestionFormAnswers(questions, selections, otherTexts),
-      },
-    });
-  }, [
-    questions,
-    allAnswered,
-    isResponding,
-    selections,
-    otherTexts,
-    onRespond,
-    permission.request.input,
-  ]);
+    setIsPreparingResponse(true);
+    const submitAnswers = async () => {
+      try {
+        const answers = await buildQuestionFormAnswersForAgent(
+          questions,
+          selections,
+          otherTexts,
+          translateTextForAgent,
+        );
+        onRespond({ behavior: "allow", updatedInput: { ...permissionInput, answers } });
+      } catch (error) {
+        console.warn("[QuestionForm] Failed to prepare translated answers", error);
+        setIsPreparingResponse(false);
+        setRespondingAction(null);
+      }
+    };
+    void submitAnswers();
+  }, [allAnswered, isBusy, onRespond, otherTexts, permissionInput, questions, selections]);
 
   const handleDeny = useCallback(() => {
-    if (!questions) return;
+    if (!questions || isBusy) return;
     setRespondingAction("dismiss");
     if (shouldSubmitEmptyOnDismiss(questions)) {
       onRespond({
         behavior: "allow",
         updatedInput: {
-          ...permission.request.input,
+          ...permissionInput,
           answers: buildQuestionFormAnswers(questions, selections, otherTexts),
         },
       });
       return;
     }
-    onRespond({
-      behavior: "deny",
-      message: "Dismissed by user",
-    });
-  }, [questions, onRespond, otherTexts, permission.request.input, selections]);
+    onRespond({ behavior: "deny", message: "Dismissed by user" });
+  }, [isBusy, onRespond, otherTexts, permissionInput, questions, selections]);
 
-  const handleSelectQuestion = useCallback((index: number) => {
-    setActiveQuestionIndex(index);
-  }, []);
+  return { handleDeny, handleSubmit, isBusy, respondingAction };
+}
+
+// The remaining branches are the form's visual states (tabs, options, free text, loading).
+// eslint-disable-next-line complexity
+export function QuestionFormCard({ permission, onRespond, isResponding }: QuestionFormCardProps) {
+  const { theme } = useUnistyles();
+  const { t } = useTranslation();
+  const isMobile = useIsCompactFormFactor();
+  const questions = useMemo(
+    () => parseQuestionFormQuestions(permission.request.input),
+    [permission.request.input],
+  );
+  const translatedForm = useTranslatedQuestionForm(questions);
+  const displayQuestions = translatedForm.questions;
+
+  const {
+    activeQuestionIndex,
+    otherTexts,
+    selections,
+    selectQuestion,
+    setActiveQuestionIndex,
+    setOtherText,
+    toggleOption,
+  } = useQuestionFormSelection(questions);
+
+  const allAnswered = areQuestionsAnswered(questions, selections, otherTexts);
+  const { handleDeny, handleSubmit, isBusy, respondingAction } = useQuestionFormSubmission({
+    questions,
+    selections,
+    otherTexts,
+    allAnswered,
+    isResponding,
+    permissionInput: permission.request.input,
+    onRespond,
+  });
+  const resolvedActiveQuestionIndex = questions
+    ? Math.min(activeQuestionIndex, questions.length - 1)
+    : 0;
+  const activeQuestion = questions?.[resolvedActiveQuestionIndex];
+  const displayActiveQuestion = displayQuestions?.[resolvedActiveQuestionIndex];
+  const activeQuestionAnswered = activeQuestion
+    ? isQuestionAnswered(activeQuestion, resolvedActiveQuestionIndex, selections, otherTexts)
+    : false;
+  const isLastQuestion = questions ? resolvedActiveQuestionIndex === questions.length - 1 : true;
 
   const navIsAnswered = useCallback(
     (qIndex: number) =>
@@ -434,12 +531,19 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
 
   const handlePrimaryAction = useCallback(() => {
     if (!isLastQuestion) {
-      if (!activeQuestionAnswered || isResponding) return;
+      if (!activeQuestionAnswered || isBusy) return;
       setActiveQuestionIndex((index) => Math.min(index + 1, (questions?.length ?? 1) - 1));
       return;
     }
     handleSubmit();
-  }, [activeQuestionAnswered, handleSubmit, isLastQuestion, isResponding, questions?.length]);
+  }, [
+    activeQuestionAnswered,
+    handleSubmit,
+    isBusy,
+    isLastQuestion,
+    questions?.length,
+    setActiveQuestionIndex,
+  ]);
 
   const dismissButtonStyle = useCallback(
     ({ pressed, hovered }: PressableStateCallbackType & { hovered?: boolean }) => [
@@ -453,7 +557,7 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
     [theme.colors.surface2, theme.colors.surface1, theme.colors.borderAccent],
   );
 
-  const primaryDisabled = isResponding || (isLastQuestion ? !allAnswered : !activeQuestionAnswered);
+  const primaryDisabled = isBusy || (isLastQuestion ? !allAnswered : !activeQuestionAnswered);
   const primaryActionLabel = isLastQuestion
     ? t("message.question.submit")
     : t("message.question.next");
@@ -487,13 +591,13 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
   // Single-select radios need a group; checkboxes are valid standalone.
   const optionsGroupAccessibility = useMemo(
     () =>
-      activeQuestion && !activeQuestion.multiSelect
+      displayActiveQuestion && activeQuestion && !activeQuestion.multiSelect
         ? ({
             accessibilityRole: "radiogroup",
-            accessibilityLabel: activeQuestion.question,
+            accessibilityLabel: displayActiveQuestion.question,
           } as const)
         : {},
-    [activeQuestion],
+    [activeQuestion, displayActiveQuestion],
   );
   const actionsContainerStyle = useMemo(
     () => [styles.actionsContainer, !isMobile && styles.actionsContainerDesktop],
@@ -513,7 +617,15 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
     return null;
   }
 
-  const dismissLabel = resolveDismissLabel(questions, t("common.actions.dismiss"));
+  if (!translatedForm.ready || !displayQuestions) {
+    return (
+      <View style={containerStyle} testID="question-form-translation-loading">
+        <LoadingSpinner size="small" color={theme.colors.foregroundMuted} />
+      </View>
+    );
+  }
+
+  const dismissLabel = resolveDismissLabel(displayQuestions, t("common.actions.dismiss"));
   const selected = selections[resolvedActiveQuestionIndex] ?? new Set<number>();
   const otherText = otherTexts[resolvedActiveQuestionIndex] ?? "";
   const showTextInput = activeQuestion ? questionShowsTextInput(activeQuestion) : false;
@@ -521,23 +633,23 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
   return (
     <View style={containerStyle} testID="question-form-card">
       <QuestionNav
-        questions={questions}
+        questions={displayQuestions}
         activeIndex={resolvedActiveQuestionIndex}
         isAnswered={navIsAnswered}
-        isResponding={isResponding}
-        onSelect={handleSelectQuestion}
+        isResponding={isBusy}
+        onSelect={selectQuestion}
       />
       <View style={styles.questionHeader}>
         <Text testID="question-form-current-question" style={questionTextStyle}>
-          {activeQuestion?.question}
+          {displayActiveQuestion?.question}
         </Text>
       </View>
 
       {activeQuestion ? (
         <View key={activeQuestion.question} style={styles.questionBlock}>
-          {activeQuestion.options.length > 0 ? (
+          {displayActiveQuestion && activeQuestion.options.length > 0 ? (
             <View style={styles.optionsWrap} {...optionsGroupAccessibility}>
-              {activeQuestion.options.map((opt, optIndex) => (
+              {displayActiveQuestion.options.map((opt, optIndex) => (
                 <QuestionOptionRow
                   key={opt.label}
                   qIndex={resolvedActiveQuestionIndex}
@@ -545,23 +657,23 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
                   option={opt}
                   isSelected={selected.has(optIndex)}
                   multiSelect={activeQuestion.multiSelect}
-                  isResponding={isResponding}
+                  isResponding={isBusy}
                   onToggle={toggleOption}
                 />
               ))}
             </View>
           ) : null}
-          {showTextInput ? (
+          {showTextInput && displayActiveQuestion ? (
             <QuestionOtherInput
               qIndex={resolvedActiveQuestionIndex}
-              accessibilityLabel={activeQuestion.question}
+              accessibilityLabel={displayActiveQuestion.question}
               value={otherText}
               placeholder={getQuestionInputPlaceholder({
-                question: activeQuestion,
+                question: displayActiveQuestion,
                 answerPlaceholder: t("message.question.answerPlaceholder"),
                 otherPlaceholder: t("message.question.otherPlaceholder"),
               })}
-              isResponding={isResponding}
+              isResponding={isBusy}
               onChange={setOtherText}
               onSubmit={handlePrimaryAction}
             />
@@ -573,7 +685,7 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
         <Pressable
           style={dismissButtonStyle}
           onPress={handleDeny}
-          disabled={isResponding}
+          disabled={isBusy}
           accessibilityRole="button"
           accessibilityLabel={dismissLabel}
           testID="question-form-dismiss"
