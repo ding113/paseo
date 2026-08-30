@@ -63,6 +63,12 @@ On Web and Electron, incomplete agent and translation Markdown is rendered by St
 Settled blocks return to Paseo's existing renderer so file links, rich copy, images, code, and
 Mermaid keep their established behavior. Native platforms retain the React Native renderer.
 
+Structured agent surfaces use the same translation runtime. Plan cards stream their translated
+title, description, and Markdown without exposing the source first. Ask User Question waits for
+its question, header, options, descriptions, placeholders, and custom dismiss label to settle
+before showing the form. Option selections map back to their original agent-language values;
+free-text answers are translated into `agentLanguage` before the permission response is sent.
+
 ## The user's own words come back
 
 The daemon echoes a canonical `user_message` containing the text it received — the
