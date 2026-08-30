@@ -264,11 +264,17 @@ jobs:
           actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"
           actual_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")"
           actual_team_id="$(/usr/libexec/PlistBuddy -c 'Print :ElectronTeamID' "$info_plist")"
+          uses_non_exempt_encryption="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :ITSAppUsesNonExemptEncryption' \
+              "$info_plist"
+          )"
 
           [[ "$actual_bundle_id" == "$APP_BUNDLE_ID" ]]
           [[ "$actual_version" == "$VERSION" ]]
           [[ "$actual_build" == "$BUILD_NUMBER" ]]
           [[ "$actual_team_id" == "$APPLE_TEAM_ID" ]]
+          [[ "$uses_non_exempt_encryption" == "false" ]]
 
           archs="$(lipo -archs "$app_path/Contents/MacOS/Paseo")"
           grep -qw arm64 <<<"$archs"
@@ -321,19 +327,69 @@ jobs:
 
           asc builds upload "${upload_args[@]}"
 
-      - name: Distribute build to internal TestFlight group
+      - name: Confirm compliance and wait for internal TestFlight readiness
         if: ${{ inputs.publish }}
+        id: testflight
         shell: bash
         env:
           BUILD_NUMBER: ${{ steps.build.outputs.build_number }}
         run: |
           set -euo pipefail
 
+          build_json="$(
+            asc builds list \
+              --app "$ASC_APP_ID" \
+              --version "$VERSION" \
+              --build-number "$BUILD_NUMBER" \
+              --platform MAC_OS \
+              --output json
+          )"
+          build_id="$(printf '%s' "$build_json" | jq -r '.data[0].id // empty')"
+          if [[ -z "$build_id" ]]; then
+            echo "Unable to resolve the uploaded build ID."
+            exit 1
+          fi
+
+          asc builds update \
+            --build-id "$build_id" \
+            --uses-non-exempt-encryption=false \
+            --output json
+
+          for attempt in $(seq 1 40); do
+            detail="$(
+              asc builds build-beta-detail view \
+                --build-id "$build_id" \
+                --output json
+            )"
+            internal_state="$(printf '%s' "$detail" | jq -r '.data.attributes.internalBuildState')"
+            echo "Internal TestFlight state ($attempt/40): $internal_state"
+
+            case "$internal_state" in
+              READY_FOR_BETA_TESTING | IN_BETA_TESTING)
+                echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              PROCESSING | MISSING_EXPORT_COMPLIANCE)
+                sleep 15
+                ;;
+              *)
+                echo "Build entered a non-testable state: $internal_state"
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "Timed out waiting for the build to become internally testable."
+          exit 1
+
+      - name: Distribute build to internal TestFlight group
+        if: ${{ inputs.publish }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
           asc builds add-groups \
-            --app "$ASC_APP_ID" \
-            --version "$VERSION" \
-            --build-number "$BUILD_NUMBER" \
-            --platform MAC_OS \
+            --build-id "${{ steps.testflight.outputs.build_id }}" \
             --group "$TESTFLIGHT_GROUP" \
             --output json
 
