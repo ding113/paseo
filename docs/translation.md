@@ -1,7 +1,8 @@
 # Translation
 
-Runtime machine translation of dynamic content, through a user-supplied OpenAI-compatible
-endpoint. Agent output is rendered in the language you read; composer input is translated
+Runtime machine translation of dynamic content through a user-selected AI provider. The app
+supports OpenAI-compatible endpoints, OpenAI, Anthropic, and Google through the Vercel AI SDK.
+Agent output is rendered in the language you read; every chat composer input is translated
 into the agent's language before it goes on the wire.
 
 This is not [i18n.md](i18n.md). That system translates static UI copy shipped in locale
@@ -46,15 +47,21 @@ Inline code, paths, URLs, and command names inside prose are covered by the prom
 practice the model does honour it — identifiers like `reducer` come back untouched — but if
 one starts rewriting them, that is when a mask/restore pass earns its keep.
 
-## Only settled text is translated
+## Settled source, streaming translation
 
 While a turn streams, an assistant message is a growing prefix and `useRevealedText` paces
-a slice of it every frame. Translating there would re-request on every coalescing flush and
-paint text that keeps being rewritten. `AssistantMessage` only asks for a translation once
-`phase` is `"complete"`.
+a slice of it every frame. Translating that growing prefix would re-request on every
+coalescing flush. Translation begins after an assistant block settles, but its result is
+consumed as a stream. Until the first translated text arrives, the response is hidden. Tool
+calls, thoughts, and later assistant blocks stay behind the same presentation barrier and are
+released in timeline order.
 
 Requests are collected for 300ms and dispatched together, so a message that arrives as six
 blocks issues its calls in one concurrent burst rather than a trickle.
+
+On Web and Electron, incomplete agent and translation Markdown is rendered by Streamdown.
+Settled blocks return to Paseo's existing renderer so file links, rich copy, images, code, and
+Mermaid keep their established behavior. Native platforms retain the React Native renderer.
 
 ## The user's own words come back
 
@@ -72,18 +79,21 @@ already recorded, with no request behind it. Gating it would make switching tran
 remove the original-text action from existing user bubbles. Copy follows the text currently
 shown; rewind always uses the original prompt so it is not translated twice.
 
-## The prompt follows the model card
+## Prompt contract
 
-Composer input uses the "Default Translation" instruction from
-[the Hy-MT2 model card](https://huggingface.co/tencent/Hy-MT2-30B-A3B) character-for-character,
-in Chinese for a Chinese target and English otherwise. A translation model is tuned against
-its documented instruction; paraphrasing is what makes one underperform. Do not reword it —
-`client.test.ts` asserts both strings against the card.
+Composer input retains the "Default Translation" scaffold from
+[the Hy-MT2 model card](https://huggingface.co/tencent/Hy-MT2-30B-A3B), in Chinese for a Chinese
+target and English otherwise. It adds one application-specific preservation instruction.
+`Agent`, `Prompt`, `Config`, `Skills`, and common git/workspace terms (including `worktree`,
+`workspace`, `repository`, `repo`, `commit`, `branch`, `remote`, `upstream`, `fork`, `merge`,
+`rebase`, `pull request`, `PR`, and `HEAD`) stay untranslated with their original casing.
+
+A leading slash command token is also kept byte-for-byte. `/goal  写一个测试` sends `/goal  `
+unchanged and translates only `写一个测试`; a bare `/goal` makes no translation request.
 
 Three consequences fall out of that instruction, and none of them are negotiable:
 
-- **No system prompt.** The card states these models have no default one, so the whole
-  instruction is a single `user` turn.
+- **No system prompt.** The whole instruction is a single `user` turn.
 - **One request per segment.** The instruction asks for the translated result and nothing
   else, which leaves no envelope a batched reply could be split back out of. Segments go out
   concurrently, so a message still costs about one round trip of wall clock. It also deletes
@@ -102,6 +112,12 @@ Sampling follows the card's 30B-A3B block. Its `top_k: -1` and `repetition_penal
 "disabled" values, so they are omitted rather than sent: they change nothing, they are not
 in the OpenAI schema, and some gateways reject a negative `top_k`.
 
+The default endpoint is `https://openrouter.ai/api/v1` and the default model is
+`tencent/hy-mt2-30b-a3b`. Provider-specific reasoning controls map the common low/medium/high
+setting to each provider's native option. Reasoning events and `<think>` / `<thinking>` tagged
+text are removed before the translation stream reaches the UI. The settings page's connection
+test consumes the same real streaming path while remaining usable when translation is disabled.
+
 ## Agent output is also plain language
 
 Agent responses use the model card's **Personalization** prompt layout, because it can carry
@@ -119,7 +135,8 @@ for one purpose must not reuse the result produced by the other prompt.
 
 ## Failure is always a fallback, never a block
 
-A failed translation renders the original. A failed _input_ translation sends the original
+A failed translation renders the original. Partial streamed output is discarded. A failed
+_input_ translation sends the original
 rather than throwing: a flaky endpoint must not stop someone from talking to their agent.
 
 Every request carries a 30s deadline. Composer input is translated on the send path, so an
