@@ -250,4 +250,37 @@ describe("useDraftAgentCreateFlow", () => {
     });
     expect(onCreateSuccess).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the translated composer identity for the created agent", async () => {
+    const createRequest = vi.fn(async (ctx: { attempt: DraftCreateAttempt }) => ({
+      agentId: "agent-1",
+      result: { id: "agent-1", ctx },
+    }));
+    const onCreateSuccess = vi.fn();
+
+    const { result } = renderHook(() =>
+      useDraftAgentCreateFlow({
+        draftId: "draft-1",
+        getPendingServerId: () => "server-1",
+        buildDraftAgent: (attempt) => ({ attempt }),
+        createRequest,
+        onCreateSuccess,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.handleCreateFromInput({
+        text: "Hello",
+        attachments: [],
+        cwd: "/repo",
+        clientMessageId: "msg-translated",
+      });
+    });
+
+    expect(createRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: expect.objectContaining({ clientMessageId: "msg-translated" }),
+      }),
+    );
+  });
 });

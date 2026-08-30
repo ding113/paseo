@@ -119,6 +119,7 @@ function buildCreateAgentOptions({
   workspaceDirectory,
   workspaceId,
   provider,
+  clientMessageId,
 }: {
   composerState: {
     modeOptions: { id: string }[];
@@ -132,6 +133,7 @@ function buildCreateAgentOptions({
   workspaceDirectory: string;
   workspaceId: string;
   provider: CreateAgentRequestOptions["provider"];
+  clientMessageId?: string;
 }): CreateAgentRequestOptions {
   // Reconcile the selected mode against the discovered modes. The mode picker
   // shows modeOptions[0] when the stored mode isn't in the list (e.g. a stale
@@ -146,6 +148,7 @@ function buildCreateAgentOptions({
     provider,
     cwd: workspaceDirectory,
     workspaceId,
+    ...(clientMessageId ? { clientMessageId } : {}),
     ...(reconciledMode !== "" ? { modeId: reconciledMode } : {}),
     ...(composerState.effectiveModelId ? { model: composerState.effectiveModelId } : {}),
     ...(composerState.effectiveThinkingOptionId
@@ -303,7 +306,7 @@ export function WorkspaceSetupDialog() {
   ]);
 
   const handleCreateChatAgent = useCallback(
-    async ({ text, attachments, cwd }: MessagePayload) => {
+    async ({ text, attachments, cwd, clientMessageId }: MessagePayload) => {
       try {
         setPendingAction("chat");
         setErrorMessage(null);
@@ -335,6 +338,7 @@ export function WorkspaceSetupDialog() {
             workspaceDirectory,
             workspaceId: ensuredWorkspace.id,
             provider: composerState.selectedProvider,
+            clientMessageId,
           }),
         );
 

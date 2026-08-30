@@ -69,7 +69,11 @@ import { HighlightedCodeBlock } from "@/components/highlighted-code-block";
 import { MarkdownFenceBlock } from "@/components/markdown/fence";
 import type { MarkdownPhase } from "@/components/markdown/fence/types";
 import { splitMarkdownBlocks } from "@/utils/split-markdown-blocks";
-import { useOriginalUserText, useTranslatedForReader } from "@/translation/use-translation";
+import {
+  useOriginalUserText,
+  useTranslatedAgentOutputForReader,
+} from "@/translation/use-translation";
+import { hasTranslatedOriginal, resolveUserMessageText } from "./user-message-translation";
 import { useRevealedText } from "@/hooks/use-revealed-text";
 import { colorMarkdownLinkChildren } from "@/components/markdown/link-children";
 import { createAssistantMarkdownParser } from "@/utils/assistant-markdown-parser";
@@ -405,7 +409,64 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: STREAM_METADATA_FONT_SIZE,
   },
+  originalToggle: {
+    padding: theme.spacing[1],
+  },
+  originalToggleLabel: {
+    color: theme.colors.foregroundMuted,
+    fontSize: STREAM_METADATA_FONT_SIZE,
+  },
 }));
+
+interface UserMessageTrailingRowProps {
+  formattedTimestamp: string;
+  hasOriginal: boolean;
+  isOriginalVisible: boolean;
+  onToggleOriginal: () => void;
+  showOriginalLabel: string;
+  hideOriginalLabel: string;
+  rewindMenu?: React.ComponentProps<typeof RewindMenu>;
+  getContent: () => string;
+  copyLabel: string;
+}
+
+function UserMessageTrailingRow({
+  formattedTimestamp,
+  hasOriginal,
+  isOriginalVisible,
+  onToggleOriginal,
+  showOriginalLabel,
+  hideOriginalLabel,
+  rewindMenu,
+  getContent,
+  copyLabel,
+}: UserMessageTrailingRowProps) {
+  const originalLabel = isOriginalVisible ? hideOriginalLabel : showOriginalLabel;
+  return (
+    <View style={userMessageStylesheet.trailingRow}>
+      <Text style={userMessageStylesheet.timestampText} testID="user-message-timestamp">
+        {formattedTimestamp}
+      </Text>
+      {hasOriginal ? (
+        <Pressable
+          testID="user-message-original-toggle"
+          style={userMessageStylesheet.originalToggle}
+          onPress={onToggleOriginal}
+          accessibilityRole="button"
+          accessibilityLabel={originalLabel}
+        >
+          <Text style={userMessageStylesheet.originalToggleLabel}>{originalLabel}</Text>
+        </Pressable>
+      ) : null}
+      {rewindMenu ? <RewindMenu {...rewindMenu} /> : null}
+      <TurnCopyButton
+        getContent={getContent}
+        containerStyle={userMessageStylesheet.copyButton}
+        accessibilityLabel={copyLabel}
+      />
+    </View>
+  );
+}
 
 interface UserMessageImagePillProps {
   image: UserMessageImageAttachment;
@@ -450,10 +511,16 @@ export const UserMessage = memo(function UserMessage({
     [lightboxMetadata],
   );
   const resolvedDisableOuterSpacing = useDisableOuterSpacing(disableOuterSpacing);
-  // `message` is what the agent received. When the prompt was translated on the way out,
-  // that is not what the user typed, and the daemon's canonical echo replaced the
-  // optimistic row holding the original. Display, copy, and rewind all want the original.
-  const displayMessage = useOriginalUserText(clientMessageId) ?? message;
+  // The timeline stores the text the agent received. Keep the user's original locally and
+  // let the translated wire text be the default history view, with an explicit original toggle.
+  const originalMessage = useOriginalUserText(clientMessageId);
+  const hasOriginal = hasTranslatedOriginal(message, originalMessage);
+  const [isOriginalVisible, setIsOriginalVisible] = useState(false);
+  const displayMessage = resolveUserMessageText({
+    message,
+    originalMessage,
+    showOriginal: isOriginalVisible,
+  });
   const hasText = message.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
@@ -467,11 +534,24 @@ export const UserMessage = memo(function UserMessage({
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const getMessageContent = useCallback(() => displayMessage, [displayMessage]);
+  const handleToggleOriginal = useCallback(() => setIsOriginalVisible((visible) => !visible), []);
   const handleRewind = useCallback(
     (input: { mode: RewindMode; rewoundText: string }) => {
       return rewindMutation.rewindAgent(input);
     },
     [rewindMutation],
+  );
+  const rewindMenu = useMemo<React.ComponentProps<typeof RewindMenu> | undefined>(
+    () =>
+      capabilities && messageId
+        ? {
+            capabilities,
+            isPending: rewindMutation.isPending,
+            rewoundText: originalMessage ?? message,
+            onRewind: handleRewind,
+          }
+        : undefined,
+    [capabilities, handleRewind, messageId, message, originalMessage, rewindMutation.isPending],
   );
 
   const containerStyle = useMemo(
@@ -559,21 +639,16 @@ export const UserMessage = memo(function UserMessage({
             pointerEvents={showTrailingRow ? "auto" : "none"}
             testID="user-message-trailing-row"
           >
-            <Text style={userMessageStylesheet.timestampText} testID="user-message-timestamp">
-              {formattedTimestamp}
-            </Text>
-            {capabilities && messageId ? (
-              <RewindMenu
-                capabilities={capabilities}
-                isPending={rewindMutation.isPending}
-                rewoundText={displayMessage}
-                onRewind={handleRewind}
-              />
-            ) : null}
-            <TurnCopyButton
+            <UserMessageTrailingRow
+              formattedTimestamp={formattedTimestamp}
+              hasOriginal={hasOriginal}
+              isOriginalVisible={isOriginalVisible}
+              onToggleOriginal={handleToggleOriginal}
+              showOriginalLabel={t("translation.showOriginal")}
+              hideOriginalLabel={t("translation.hideOriginal")}
+              rewindMenu={rewindMenu}
               getContent={getMessageContent}
-              containerStyle={userMessageStylesheet.copyButton}
-              accessibilityLabel={t("message.actions.copyMessage")}
+              copyLabel={t("message.actions.copyMessage")}
             />
           </View>
         ) : null}
@@ -1526,7 +1601,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   // Only settled blocks are translated. While the turn streams, `message` is a growing
   // prefix, so translating it would re-request on every coalescing flush and show text
   // that keeps being rewritten.
-  const translated = useTranslatedForReader(phase === "complete" ? message : null);
+  const translated = useTranslatedAgentOutputForReader(phase === "complete" ? message : null);
   const [isOriginalVisible, setIsOriginalVisible] = useState(false);
   const handleToggleOriginal = useCallback(() => setIsOriginalVisible((v) => !v), []);
   const displayedMessage = translated ?? message;

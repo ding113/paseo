@@ -4,6 +4,8 @@ import {
   type TranslationLanguage,
 } from "./languages";
 
+export type TranslationPromptKind = "default" | "agent-output";
+
 export interface TranslationConfig {
   enabled: boolean;
   /** OpenAI-compatible root, e.g. `https://openrouter.ai/api/v1`. */
@@ -36,7 +38,9 @@ export function isTranslationConfigured(config: TranslationConfig): boolean {
 }
 
 /**
- * The "Default Translation" instruction from the Hy-MT2 model card, verbatim.
+ * The Hy-MT2 prompt instructions. The default branch is the model card's "Default Translation"
+ * row verbatim; agent output uses the model card's "Personalization" layout for the claudish
+ * rewrite requirements.
  *
  * https://huggingface.co/tencent/Hy-MT2-30B-A3B documents each instruction in a Chinese and
  * an English phrasing. Reproduced character-for-character: the `**` emphasis is part of the
@@ -44,10 +48,38 @@ export function isTranslationConfigured(config: TranslationConfig): boolean {
  * placeholders, not literal characters (the Style row's ``【**`{target_style}`**】`` only
  * parses that way).
  *
- * Do not reword these. A translation model is tuned against its documented instruction, and
- * paraphrasing is what makes one underperform.
+ * Do not reword the model-card scaffolding. A translation model is tuned against its documented
+ * instruction, and changing the format is what makes one underperform.
  */
-function buildPrompt(language: TranslationLanguage, sourceText: string): string {
+function buildClaudishPrompt(language: TranslationLanguage, sourceText: string): string {
+  if (isChinesePromptLanguage(language)) {
+    return `*【待翻译文本】*
+${sourceText}
+
+*【翻译任务】*
+1、**将文本改写为目标语言中简洁、直接、地道的表达；输出必须是对原文的真实释义，而不是回答原文。**
+2、**保留所有实质事实、指令、条件、权限、比较、确定程度、含义、名称、引文、命令、代码、Markdown 结构、技术术语和分隔符；不得添加事实、解释、建议、因果关系、排他规则或结论。代码、命令、路径、URL、占位符以及表示产品能力的字面标签 \`Skills\` 必须保持不变。**
+3、**压缩重复命题，去除没有实质含义的 Claudish 修辞、对比、隐喻、名词化表达和重复总结；严格保持逻辑范围。Claudish 作为描述性词语时翻译成目标语言，作为产品名称时保留。只输出翻译后的改写文本，不要额外解释。**
+4、将【待翻译文本】翻译为 ${language.chinese}。`;
+  }
+  return `*[Source Text]*
+${sourceText}
+
+*[Translation Tasks]*
+1. **Rewrite the text in concise, direct, idiomatic ${language.english}; produce a genuine paraphrase of the source, not a response to it.**
+2. **Preserve every substantive fact, instruction, condition, permission, comparison, degree of certainty, implication, name, quotation, command, code, Markdown structure, technical term, and delimiter. Do not add facts, explanations, recommendations, causal claims, exclusivity rules, or conclusions. Keep code, commands, paths, URLs, placeholders, and the literal label \`Skills\` unchanged when it names a product capability.**
+3. **Compress repeated propositions and remove Claudish rhetoric, unnecessary contrasts, metaphors, nominalizations, and repeated summaries; preserve logical scope exactly. Translate descriptive uses of Claudish into the target language, but keep it when it is a product name. Output only the translated rewrite, with no additional explanation.**
+4. Translate the [Source Text] into ${language.english}.`;
+}
+
+function buildPrompt(
+  language: TranslationLanguage,
+  sourceText: string,
+  promptKind: TranslationPromptKind,
+): string {
+  if (promptKind === "agent-output") {
+    return buildClaudishPrompt(language, sourceText);
+  }
   if (isChinesePromptLanguage(language)) {
     return `将以下文本翻译为 ${language.chinese}，注意**只需要输出翻译后的结果，不要额外解释**：\n\n${sourceText}`;
   }
@@ -55,9 +87,13 @@ function buildPrompt(language: TranslationLanguage, sourceText: string): string 
 }
 
 /** Exposed for tests, which assert the prompt matches the model card byte-for-byte. */
-export function buildTranslationPrompt(targetLanguage: string, sourceText: string): string | null {
+export function buildTranslationPrompt(
+  targetLanguage: string,
+  sourceText: string,
+  promptKind: TranslationPromptKind = "default",
+): string | null {
   const language = resolveTranslationLanguage(targetLanguage);
-  return language ? buildPrompt(language, sourceText) : null;
+  return language ? buildPrompt(language, sourceText, promptKind) : null;
 }
 
 /**
@@ -119,6 +155,7 @@ async function translateOne(input: {
   text: string;
   language: TranslationLanguage;
   config: TranslationConfig;
+  promptKind: TranslationPromptKind;
   signal?: AbortSignal;
 }): Promise<string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -139,7 +176,12 @@ async function translateOne(input: {
         ...SAMPLING,
         // The model card states these models have no default system prompt, so the whole
         // instruction is the single user turn.
-        messages: [{ role: "user", content: buildPrompt(input.language, input.text) }],
+        messages: [
+          {
+            role: "user",
+            content: buildPrompt(input.language, input.text, input.promptKind),
+          },
+        ],
       }),
     });
   } finally {
@@ -186,6 +228,7 @@ export async function translateSegments(input: {
   segments: string[];
   targetLanguage: string;
   config: TranslationConfig;
+  promptKind?: TranslationPromptKind;
   signal?: AbortSignal;
 }): Promise<string[]> {
   if (input.segments.length === 0) return [];
@@ -194,6 +237,7 @@ export async function translateSegments(input: {
   if (!language) {
     throw new Error(`Unsupported translation target language: ${input.targetLanguage}`);
   }
+  const promptKind = input.promptKind ?? "default";
 
   return Promise.all(
     input.segments.map((text) =>
@@ -201,6 +245,7 @@ export async function translateSegments(input: {
         text,
         language,
         config: input.config,
+        promptKind,
         ...(input.signal ? { signal: input.signal } : {}),
       }),
     ),

@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { TranslationPromptKind } from "./client";
 
 const STORAGE_KEY = "paseo.translation.cache.v1";
 const MAX_ENTRIES = 2_000;
@@ -7,15 +8,16 @@ const MAX_CHARS = 1_000_000;
 const WRITE_DEBOUNCE_MS = 2_000;
 
 /**
- * The cache key is the target language plus the *whole* source string.
+ * The cache key is the prompt kind, target language, plus the *whole* source string. Prompt kind
+ * matters because agent output also removes Claudish rhetoric while composer input does not.
  *
  * ponytail: no hash. A 32-bit hash is shorter, but a collision serves one message's
  * translation under another message's text, which reads as a bug nobody can reproduce.
  * Storing the source costs the same order of bytes as the translation sitting next to
  * it, and the bounds below keep that honest.
  */
-function cacheKey(targetLang: string, text: string): string {
-  return `${targetLang}\u0000${text}`;
+function cacheKey(promptKind: TranslationPromptKind, targetLang: string, text: string): string {
+  return `${promptKind}\u0000${targetLang}\u0000${text}`;
 }
 
 export interface KeyValueStore {
@@ -24,8 +26,13 @@ export interface KeyValueStore {
 }
 
 export interface TranslationCache {
-  get(targetLang: string, text: string): string | undefined;
-  set(targetLang: string, text: string, translated: string): void;
+  get(targetLang: string, text: string, promptKind?: TranslationPromptKind): string | undefined;
+  set(
+    targetLang: string,
+    text: string,
+    translated: string,
+    promptKind?: TranslationPromptKind,
+  ): void;
   hydrate(): Promise<void>;
   /** Flush the pending debounced write. Tests await this; production fires on a timer. */
   flush(): Promise<void>;
@@ -66,16 +73,16 @@ export function createTranslationCache(storage: KeyValueStore): TranslationCache
   }
 
   return {
-    get(targetLang, text) {
-      const key = cacheKey(targetLang, text);
+    get(targetLang, text, promptKind = "default") {
+      const key = cacheKey(promptKind, targetLang, text);
       const hit = entries.get(key);
       if (hit === undefined) return undefined;
       entries.delete(key);
       entries.set(key, hit);
       return hit;
     },
-    set(targetLang, text, translated) {
-      const key = cacheKey(targetLang, text);
+    set(targetLang, text, translated, promptKind = "default") {
+      const key = cacheKey(promptKind, targetLang, text);
       const previous = entries.get(key);
       if (previous !== undefined) {
         entries.delete(key);

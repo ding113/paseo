@@ -85,6 +85,11 @@ interface SubmitContext {
   text: string;
   attachments: ComposerAttachment[];
   cwd: string;
+  clientMessageId?: string;
+}
+
+function resolveCreateAttemptClientMessageId(clientMessageId: string | undefined): string {
+  return clientMessageId ?? generateMessageId();
 }
 
 interface CreateRequestContext {
@@ -254,7 +259,7 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
   );
 
   const handleCreateFromInput = useCallback(
-    async ({ text, attachments, cwd }: SubmitContext) => {
+    async ({ text, attachments, cwd, clientMessageId }: SubmitContext) => {
       if (isSubmitting) {
         throw new Error(t("composer.errors.alreadyLoading"));
       }
@@ -296,7 +301,7 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
       }
 
       const attempt: CreateAttempt = {
-        clientMessageId: generateMessageId(),
+        clientMessageId: resolveCreateAttemptClientMessageId(clientMessageId),
         text: trimmedPrompt,
         timestamp: new Date(),
         ...(images && images.length > 0 ? { images } : {}),

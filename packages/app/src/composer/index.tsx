@@ -133,6 +133,7 @@ import { AttachmentLightbox, type ImageLightboxSource } from "@/components/attac
 import { openExternalUrl } from "@/utils/open-external-url";
 import { useIsDictationReady } from "@/hooks/use-is-dictation-ready";
 import { useForgeSearchQuery } from "@/git/use-forge-search-query";
+import { prepareComposerSubmission } from "@/composer/translation";
 import { useCheckoutStatusQuery } from "@/git/use-status-query";
 import { useCheckoutPrStatusQuery } from "@/git/use-pr-status-query";
 import { getForgePresentation } from "@/git/forge";
@@ -1445,7 +1446,13 @@ function ComposerContentImpl({
     async (text: string, submitAttachments: ComposerAttachment[]) => {
       onMessageSent?.();
       if (onSubmitMessageRef.current) {
-        await onSubmitMessageRef.current({ text, attachments: submitAttachments, cwd });
+        const payload = await prepareComposerSubmission({
+          text,
+          attachments: submitAttachments,
+          cwd,
+          inputMode,
+        });
+        await onSubmitMessageRef.current(payload);
         return;
       }
       if (!sendAgentMessageRef.current) {
@@ -1458,7 +1465,7 @@ function ComposerContentImpl({
         appSettings.sendBehavior === "steer" ? "steer" : "interrupt",
       );
     },
-    [appSettings.sendBehavior, cwd, onMessageSent, t],
+    [appSettings.sendBehavior, cwd, inputMode, onMessageSent, t],
   );
 
   useEffect(() => {

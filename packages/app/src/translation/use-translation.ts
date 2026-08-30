@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 import { useSettings } from "@/hooks/use-settings";
-import { isTranslationConfigured, type TranslationConfig } from "./client";
+import {
+  isTranslationConfigured,
+  type TranslationConfig,
+  type TranslationPromptKind,
+} from "./client";
 import { translationCache } from "./cache";
 import {
   requestTranslation,
@@ -48,21 +52,30 @@ export function useTranslationRuntimeSync(): void {
 export function useTranslatedText(
   text: string | null | undefined,
   targetLanguage: string,
+  promptKind: TranslationPromptKind = "default",
 ): string | undefined {
   const enabled = useIsTranslationEnabled();
   const stored = useTranslationStore((state) =>
-    text ? selectTranslation(state, text, targetLanguage) : undefined,
+    text ? selectTranslation(state, text, targetLanguage, promptKind) : undefined,
   );
 
   if (!enabled || !text) return undefined;
   if (stored !== undefined) return stored;
-  return requestTranslation(text, targetLanguage);
+  return requestTranslation(text, targetLanguage, promptKind);
 }
 
 /** Text produced elsewhere, rendered in the language you read. */
 export function useTranslatedForReader(text: string | null | undefined): string | undefined {
   const config = useTranslationConfig();
   return useTranslatedText(text, config.myLanguage);
+}
+
+/** Agent output also receives the claudish-to-plain-language rewrite prompt. */
+export function useTranslatedAgentOutputForReader(
+  text: string | null | undefined,
+): string | undefined {
+  const config = useTranslationConfig();
+  return useTranslatedText(text, config.myLanguage, "agent-output");
 }
 
 /**
