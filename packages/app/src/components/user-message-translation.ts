@@ -7,10 +7,12 @@ export function hasTranslatedOriginal(
 
 export function resolveUserMessageText(input: {
   message: string;
+  wireMessage?: string;
   originalMessage: string | undefined;
   showOriginal: boolean;
 }): string {
-  return input.showOriginal && hasTranslatedOriginal(input.message, input.originalMessage)
+  const wireMessage = input.wireMessage ?? input.message;
+  return input.showOriginal && hasTranslatedOriginal(wireMessage, input.originalMessage)
     ? input.originalMessage!
-    : input.message;
+    : wireMessage;
 }
