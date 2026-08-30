@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import React, { useMemo, type ReactNode } from "react";
 import { Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 import Markdown, { type ASTNode } from "react-native-markdown-display";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
@@ -6,6 +6,8 @@ import { useTranslation } from "react-i18next";
 import { createMarkdownStyles } from "@/styles/markdown-styles";
 import { getMarkdownListMarker } from "@/utils/markdown-list";
 import { createMarkdownParser } from "@/utils/markdown-parser";
+import { useRequestedAgentOutputTranslationState } from "@/translation/use-translation";
+import { resolveRequestedTranslation } from "@/translation/presentation";
 
 // Without this prop react-native-markdown-display builds its own parser with
 // `typographer: true`, which would render a plan's literal `(c)` as ©. Its
@@ -199,7 +201,16 @@ export function PlanCard({
   const { t } = useTranslation();
   const markdownStyles = createMarkdownStyles(theme);
   const markdownRules = createPlanMarkdownRules();
-  const resolvedTitle = title ?? t("agentStream.permission.plan");
+  const textTranslation = useRequestedAgentOutputTranslationState(text);
+  const titleTranslation = useRequestedAgentOutputTranslationState(title);
+  const descriptionTranslation = useRequestedAgentOutputTranslationState(description);
+  const resolvedTitle = title
+    ? resolveRequestedTranslation(title, titleTranslation)
+    : t("agentStream.permission.plan");
+  const resolvedDescription = description
+    ? resolveRequestedTranslation(description, descriptionTranslation)
+    : undefined;
+  const resolvedText = resolveRequestedTranslation(text, textTranslation);
 
   const containerStyle = useMemo(
     () => [
@@ -224,9 +235,9 @@ export function PlanCard({
   return (
     <View testID={testID} style={containerStyle}>
       <Text style={titleStyle}>{resolvedTitle}</Text>
-      {description ? <Text style={descriptionStyle}>{description}</Text> : null}
+      {resolvedDescription ? <Text style={descriptionStyle}>{resolvedDescription}</Text> : null}
       <Markdown style={markdownStyles} rules={markdownRules} markdownit={planMarkdownParser}>
-        {text}
+        {resolvedText}
       </Markdown>
       {footer ? <View style={styles.footer}>{footer}</View> : null}
     </View>
