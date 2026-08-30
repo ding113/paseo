@@ -65,7 +65,7 @@ export default defineConfig({
   // so it scans the native files and dies on imports react-native-web has no answer for.
   // Unbundled, the same imports go through the resolver below and land on the web files.
   optimizeDeps: {
-    include: ["react/jsx-runtime"],
+    include: ["react/jsx-runtime", "@testing-library/dom"],
     exclude: ["react-native-reanimated"],
   },
   // The globals a React Native bundler defines, which esbuild is no longer there to supply for
@@ -101,8 +101,7 @@ export default defineConfig({
         replacement: path.resolve(__dirname, "../relay/src/index.ts"),
       },
       { find: "@", replacement: path.resolve(__dirname, "src") },
-      // Must precede the `react-native` alias: a string `find` matches by prefix, so this subpath
-      // would otherwise resolve inside a react-native-web *file* and break the dependency scan.
+      // Must precede the `react-native` alias so native-only renderer internals stay isolated.
       // Reanimated only imports it on the native path, which no test takes.
       {
         find: /^react-native\/Libraries\/Renderer\/shims\/ReactFabric$/,
@@ -112,8 +111,8 @@ export default defineConfig({
       // react alias below (the CJS build uses require('react') which bypasses
       // Vite alias resolution).
       {
-        find: "react-native",
-        replacement: path.resolve(rootNodeModules, "react-native-web/dist/index.js"),
+        find: /^react-native$/,
+        replacement: path.resolve(__dirname, "test-stubs/react-native-web.ts"),
       },
       { find: "react", replacement: resolvePackageEntry("react") },
       {
