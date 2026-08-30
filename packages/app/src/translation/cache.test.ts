@@ -26,6 +26,15 @@ describe("translation cache", () => {
     expect(cache.get("ja", "Hello")).toBeUndefined();
   });
 
+  it("keeps agent-output rewrites separate from default translations", () => {
+    const cache = createTranslationCache(createMemoryStore());
+    cache.set("zh-CN", "Hello", "你好");
+    expect(cache.get("zh-CN", "Hello", "agent-output")).toBeUndefined();
+    cache.set("zh-CN", "Hello", "你好，朋友", "agent-output");
+    expect(cache.get("zh-CN", "Hello")).toBe("你好");
+    expect(cache.get("zh-CN", "Hello", "agent-output")).toBe("你好，朋友");
+  });
+
   it("misses for text it has never seen", () => {
     const cache = createTranslationCache(createMemoryStore());
     cache.set("zh-CN", "Hello", "你好");

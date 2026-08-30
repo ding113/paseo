@@ -63,6 +63,28 @@ describe("Hy-MT2 prompt", () => {
     );
   });
 
+  it("uses the documented Personalization layout for agent output rewrites", () => {
+    const prompt = buildTranslationPrompt(
+      "en",
+      "The cache boundary is load-bearing.",
+      "agent-output",
+    );
+    expect(prompt).toContain("*[Source Text]*");
+    expect(prompt).toContain("*[Translation Tasks]*");
+    expect(prompt).toContain("Translate the [Source Text] into English.");
+    expect(prompt).toContain("Translate descriptive uses of Claudish into the target language");
+    expect(prompt).not.toContain("plain English");
+  });
+
+  it("keeps the agent-output style instructions language-agnostic for Chinese", () => {
+    const prompt = buildTranslationPrompt("zh", "Claudish output", "agent-output");
+    expect(prompt).toContain("*【待翻译文本】*");
+    expect(prompt).toContain("*【翻译任务】*");
+    expect(prompt).toContain("翻译成目标语言");
+    expect(prompt).toContain("作为描述性词语时翻译成目标语言");
+    expect(prompt).toContain("翻译为 中文");
+  });
+
   it("uses the Chinese name in the Chinese prompt and the English name in the English one", () => {
     expect(buildTranslationPrompt("zh-Hant", "x")).toContain("翻译为 繁体中文，");
     expect(buildTranslationPrompt("ja", "x")).toContain("into Japanese.");
@@ -110,6 +132,20 @@ describe("translateSegments", () => {
     const messages = bodyOf(fetchMock.mock.calls[0]).messages as Array<{ role: string }>;
     expect(messages).toHaveLength(1);
     expect(messages[0]?.role).toBe("user");
+  });
+
+  it("uses the agent-output prompt only when requested", async () => {
+    const fetchMock = stubFetch("translated");
+    await translateSegments({
+      segments: ["The boundary is load-bearing."],
+      targetLanguage: "zh",
+      config,
+      promptKind: "agent-output",
+    });
+    const body = bodyOf(fetchMock.mock.calls[0]);
+    const content = String((body.messages as Array<{ content: string }>)[0]?.content);
+    expect(content).toContain("*【待翻译文本】*");
+    expect(content).toContain("Claudish");
   });
 
   it("sends the sampling parameters the model card recommends for 30B-A3B", async () => {

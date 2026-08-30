@@ -20,7 +20,7 @@ import type { TurnFooterHost } from "./layout";
 import { AssistantForkMenu } from "@/components/assistant-fork-menu";
 import { SyncedLoader } from "@/components/synced-loader";
 import { useRetainedPanelActive } from "@/components/retained-panel";
-import { translateForReaderSync } from "@/translation/store";
+import { translateForAgentOutputSync } from "@/translation/store";
 
 const ThemedSyncedLoader = withUnistyles(SyncedLoader);
 const workingIndicatorColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
@@ -182,7 +182,7 @@ function CompletedTurnFooter({
         // on the clipboard while the screen shows the translation.
         items: items.map((item) =>
           item.kind === "assistant_message"
-            ? { ...item, text: translateForReaderSync(item.text) }
+            ? { ...item, text: translateForAgentOutputSync(item.text) }
             : item,
         ),
         startIndex,

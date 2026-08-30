@@ -59,9 +59,9 @@ blocks issues its calls in one concurrent burst rather than a trickle.
 ## The user's own words come back
 
 The daemon echoes a canonical `user_message` containing the text it received — the
-translation. Left alone, that replaces the optimistic row and shows the user a translation
-of their own prompt. Sending a prompt therefore records the original under its
-`clientMessageId`, which the daemon echoes back, and `UserMessage` renders that.
+translation. Sending a prompt therefore records the original under its `clientMessageId`,
+which the daemon echoes back. `UserMessage` renders the translated wire text in history by
+default and offers a `Show original` action for the local text the user typed.
 
 Keyed by identity, not by the wire text. Two different prompts can translate to the same
 string, and a text-keyed map lets the second overwrite the first — one message would then
@@ -69,11 +69,12 @@ render another's words in its bubble, its copy payload, and its rewind text.
 
 The lookup is not gated on whether translation is enabled: it is a local read of something
 already recorded, with no request behind it. Gating it would make switching translation off
-rewrite every existing user bubble into agent-language wire text.
+remove the original-text action from existing user bubbles. Copy follows the text currently
+shown; rewind always uses the original prompt so it is not translated twice.
 
-## The prompt is the model card's, verbatim
+## The prompt follows the model card
 
-`translation/client.ts` sends the "Default Translation" instruction from
+Composer input uses the "Default Translation" instruction from
 [the Hy-MT2 model card](https://huggingface.co/tencent/Hy-MT2-30B-A3B) character-for-character,
 in Chinese for a Chinese target and English otherwise. A translation model is tuned against
 its documented instruction; paraphrasing is what makes one underperform. Do not reword it —
@@ -101,6 +102,21 @@ Sampling follows the card's 30B-A3B block. Its `top_k: -1` and `repetition_penal
 "disabled" values, so they are omitted rather than sent: they change nothing, they are not
 in the OpenAI schema, and some gateways reject a negative `top_k`.
 
+## Agent output is also plain language
+
+Agent responses use the model card's **Personalization** prompt layout, because it can carry
+the several requirements from the
+[claudish-to-english specification](https://github.com/programasweights/claudish/blob/main/specs/claudish-to-english.md):
+produce a genuine paraphrase in the target language, preserve substantive meaning and logical
+scope, remove redundant Claudish rhetoric, keep code/Markdown/commands/URLs/placeholders and
+the capability label `Skills`, and output only the rewritten translation. Descriptive uses of
+"Claudish" may be translated; a product name remains unchanged. The prompt keeps the model
+card's `[Source Text]` and `[Translation Tasks]` headings and numbering exactly, while the
+composer continues to use the default prompt without this rewrite style.
+
+Agent-output and composer-input requests have separate cache keys. A source string translated
+for one purpose must not reuse the result produced by the other prompt.
+
 ## Failure is always a fallback, never a block
 
 A failed translation renders the original. A failed _input_ translation sends the original
@@ -122,11 +138,12 @@ untranslated until restart.
 
 ## Not covered
 
-The interception point is the app composer (`composer/actions.ts`). Prompts entering an
-agent from **MCP `send_agent_prompt`**, the **CLI**, a **new agent's first prompt**, or a
-**schedule** are not translated. Covering those means moving to the daemon's universal
-chokepoint, `startAgentRun` in `packages/server/src/server/agent/agent-prompt.ts`, which
-also has to handle `AgentPromptContentBlock[]` and skip `<paseo-system>` envelopes.
+The interception point is the app composer (`composer/actions.ts` and
+`composer/translation.ts`). Existing-agent prompts and app-managed first prompts go through it.
+Prompts entering an agent from **MCP `send_agent_prompt`**, the **CLI**, or a **schedule** are
+not translated. Covering those means moving to the daemon's universal chokepoint,
+`startAgentRun` in `packages/server/src/server/agent/agent-prompt.ts`, which also has to handle
+`AgentPromptContentBlock[]` and skip `<paseo-system>` envelopes.
 
 Workspace names are translated in the sidebar and the workspace header, but not in the
 Command Center: it is a search surface, and translating the label without also matching the

@@ -4,6 +4,7 @@ import {
   DEFAULT_TRANSLATION_CONFIG,
   isTranslationConfigured,
   translateSegments,
+  type TranslationPromptKind,
   type TranslationConfig,
 } from "./client";
 import { joinParts, splitTranslatableParts, type TextPart } from "./segments";
@@ -17,8 +18,8 @@ const BATCH_WINDOW_MS = 300;
 /** Concurrent requests per flush. Each segment is its own request; this caps the fan-out. */
 const MAX_BATCH_SEGMENTS = 20;
 
-function entryKey(targetLanguage: string, text: string): string {
-  return `${targetLanguage}\n${text}`;
+function entryKey(promptKind: TranslationPromptKind, targetLanguage: string, text: string): string {
+  return `${promptKind}\n${targetLanguage}\n${text}`;
 }
 
 export type TranslationStatus = "failed";
@@ -46,6 +47,7 @@ interface QueuedJob {
   key: string;
   text: string;
   targetLanguage: string;
+  promptKind: TranslationPromptKind;
 }
 
 let config: TranslationConfig = DEFAULT_TRANSLATION_CONFIG;
@@ -104,7 +106,11 @@ function markFailed(keys: readonly string[]): void {
  * expanded segments from every job are flattened into shared requests and then folded
  * back into per-job messages by walking the parts in order.
  */
-async function runJobs(targetLanguage: string, jobs: readonly QueuedJob[]): Promise<void> {
+async function runJobs(
+  targetLanguage: string,
+  promptKind: TranslationPromptKind,
+  jobs: readonly QueuedJob[],
+): Promise<void> {
   const expanded = jobs.map((job) => ({ job, parts: splitTranslatableParts(job.text) }));
 
   const pending: Array<{ jobIndex: number; partIndex: number; text: string }> = [];
@@ -134,6 +140,7 @@ async function runJobs(targetLanguage: string, jobs: readonly QueuedJob[]): Prom
         segments: chunk.map((item) => item.text),
         targetLanguage,
         config,
+        promptKind,
       });
       chunk.forEach((item, index) => {
         const value = translated[index];
@@ -154,7 +161,7 @@ async function runJobs(targetLanguage: string, jobs: readonly QueuedJob[]): Prom
     if (!parts) return;
     const body = joinParts(parts);
     entries[entry.job.key] = body;
-    translationCache.set(targetLanguage, entry.job.text, body);
+    translationCache.set(targetLanguage, entry.job.text, body, promptKind);
   });
   commitEntries(entries);
 }
@@ -165,15 +172,17 @@ function flushQueue(): void {
   queue = new Map();
   if (drained.length === 0) return;
 
-  const byLanguage = new Map<string, QueuedJob[]>();
+  const byPrompt = new Map<string, QueuedJob[]>();
   for (const job of drained) {
-    const bucket = byLanguage.get(job.targetLanguage);
+    const bucketKey = `${job.promptKind}\u0000${job.targetLanguage}`;
+    const bucket = byPrompt.get(bucketKey);
     if (bucket) bucket.push(job);
-    else byLanguage.set(job.targetLanguage, [job]);
+    else byPrompt.set(bucketKey, [job]);
   }
 
-  for (const [targetLanguage, jobs] of byLanguage) {
-    void runJobs(targetLanguage, jobs);
+  for (const jobs of byPrompt.values()) {
+    const first = jobs[0];
+    if (first) void runJobs(first.targetLanguage, first.promptKind, jobs);
   }
 }
 
@@ -181,11 +190,15 @@ function flushQueue(): void {
  * Ask for a translation. Safe to call from render: it returns a cached value when there is
  * one and otherwise only schedules work, without writing store state synchronously.
  */
-export function requestTranslation(text: string, targetLanguage: string): string | undefined {
+export function requestTranslation(
+  text: string,
+  targetLanguage: string,
+  promptKind: TranslationPromptKind = "default",
+): string | undefined {
   if (!isTranslationConfigured(config)) return undefined;
   if (text.trim().length === 0) return undefined;
 
-  const key = entryKey(targetLanguage, text);
+  const key = entryKey(promptKind, targetLanguage, text);
   const state = useTranslationStore.getState();
   const known = state.entries[key];
   if (known !== undefined) return known;
@@ -193,7 +206,7 @@ export function requestTranslation(text: string, targetLanguage: string): string
   // endpoint into an unbounded request loop.
   if (state.status[key] === "failed") return undefined;
 
-  const cached = translationCache.get(targetLanguage, text);
+  const cached = translationCache.get(targetLanguage, text, promptKind);
   if (cached !== undefined) {
     // Deferred because callers read this during render, and writing store state there is
     // what produces React's "cannot update a component while rendering" warning.
@@ -203,7 +216,7 @@ export function requestTranslation(text: string, targetLanguage: string): string
 
   // The queue itself is the de-dupe, so no store write is needed to mark work in flight.
   if (queue.has(key)) return undefined;
-  queue.set(key, { key, text, targetLanguage });
+  queue.set(key, { key, text, targetLanguage, promptKind });
   if (flushTimer === null) {
     flushTimer = setTimeout(flushQueue, BATCH_WINDOW_MS);
   }
@@ -218,12 +231,16 @@ export function requestTranslation(text: string, targetLanguage: string): string
  * from before translation was configured, or from the CLI — and paying for a round trip
  * to render someone's own words back at them is not worth it.
  */
-export function lookupTranslation(text: string, targetLanguage: string): string | undefined {
-  const key = entryKey(targetLanguage, text);
+export function lookupTranslation(
+  text: string,
+  targetLanguage: string,
+  promptKind: TranslationPromptKind = "default",
+): string | undefined {
+  const key = entryKey(promptKind, targetLanguage, text);
   const known = useTranslationStore.getState().entries[key];
   if (known !== undefined) return known;
 
-  const cached = translationCache.get(targetLanguage, text);
+  const cached = translationCache.get(targetLanguage, text, promptKind);
   if (cached === undefined) return undefined;
   queueMicrotask(() => commitEntries({ [key]: cached }));
   return cached;
@@ -237,18 +254,22 @@ export function lookupTranslation(text: string, targetLanguage: string): string 
  * translation endpoint blocks the user from talking to their agent at all. The agent still
  * receives the message, just untranslated.
  */
-export async function translateNow(text: string, targetLanguage: string): Promise<string> {
+export async function translateNow(
+  text: string,
+  targetLanguage: string,
+  promptKind: TranslationPromptKind = "default",
+): Promise<string> {
   if (!isTranslationConfigured(config)) return text;
   if (text.trim().length === 0) return text;
 
-  const key = entryKey(targetLanguage, text);
+  const key = entryKey(promptKind, targetLanguage, text);
   const known = useTranslationStore.getState().entries[key];
   if (known !== undefined) return known;
-  const cached = translationCache.get(targetLanguage, text);
+  const cached = translationCache.get(targetLanguage, text, promptKind);
   if (cached !== undefined) return cached;
 
   try {
-    await runJobs(targetLanguage, [{ key, text, targetLanguage }]);
+    await runJobs(targetLanguage, promptKind, [{ key, text, targetLanguage, promptKind }]);
     return useTranslationStore.getState().entries[key] ?? text;
   } catch (error) {
     console.warn("[translation] Input translation failed; sending the original", error);
@@ -293,12 +314,17 @@ export function translateForReaderSync(text: string): string {
   return lookupTranslation(text, config.myLanguage) ?? text;
 }
 
+export function translateForAgentOutputSync(text: string): string {
+  return lookupTranslation(text, config.myLanguage, "agent-output") ?? text;
+}
+
 export function selectTranslation(
   state: TranslationState,
   text: string,
   targetLanguage: string,
+  promptKind: TranslationPromptKind = "default",
 ): string | undefined {
-  return state.entries[entryKey(targetLanguage, text)];
+  return state.entries[entryKey(promptKind, targetLanguage, text)];
 }
 
 /** Test seam: drop all queued work and memoized results. */

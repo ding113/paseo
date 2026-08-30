@@ -774,6 +774,7 @@ interface SubmitDraftInput {
   workspaceId: string;
   workspaceDirectory: string;
   text: string;
+  clientMessageId?: string;
   attachments: ComposerAttachment[];
   provider: AgentProvider;
   composerState: NewWorkspaceComposerState;
@@ -984,6 +985,7 @@ async function runCreateChatAgent(input: CreateChatAgentInput): Promise<SubmitOu
     workspaceId: ensuredWorkspace.id,
     workspaceDirectory: ensuredWorkspace.workspaceDirectory,
     text,
+    clientMessageId: payload.clientMessageId,
     attachments,
     provider,
     composerState,
@@ -1060,13 +1062,14 @@ async function submitWorkspaceDraft(input: SubmitDraftInput): Promise<SubmitOutc
     workspaceId,
     workspaceDirectory,
     text,
+    clientMessageId: clientMessageIdInput,
     attachments,
     provider,
     composerState,
     initialSetup,
   } = input;
   const draftId = draftIdInput?.trim() || generateDraftId();
-  const clientMessageId = generateMessageId();
+  const clientMessageId = clientMessageIdInput ?? generateMessageId();
   const timestamp = Date.now();
   const wirePayload = splitComposerAttachmentsForSubmit(attachments, {
     format: resolveComposerAttachmentSubmitFormat({
