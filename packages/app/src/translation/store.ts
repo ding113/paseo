@@ -18,11 +18,15 @@ const BATCH_WINDOW_MS = 300;
 /** Concurrent requests per flush. Each segment is its own request; this caps the fan-out. */
 const MAX_BATCH_SEGMENTS = 20;
 
-function entryKey(promptKind: TranslationPromptKind, targetLanguage: string, text: string): string {
+export function translationEntryKey(
+  promptKind: TranslationPromptKind,
+  targetLanguage: string,
+  text: string,
+): string {
   return `${promptKind}\n${targetLanguage}\n${text}`;
 }
 
-export type TranslationStatus = "failed";
+export type TranslationStatus = "pending" | "streaming" | "complete" | "failed";
 
 interface TranslationState {
   entries: Record<string, string>;
@@ -35,12 +39,15 @@ interface TranslationState {
    * message would render another's words.
    */
   originals: Record<string, string>;
+  /** What was sent to the agent, even while an optimistic row still presents local text. */
+  wireTexts: Record<string, string>;
 }
 
 export const useTranslationStore = create<TranslationState>()(() => ({
   entries: {},
   status: {},
   originals: {},
+  wireTexts: {},
 }));
 
 interface QueuedJob {
@@ -53,15 +60,23 @@ interface QueuedJob {
 let config: TranslationConfig = DEFAULT_TRANSLATION_CONFIG;
 let queue = new Map<string, QueuedJob>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let configGeneration = 0;
+const activeControllers = new Set<AbortController>();
 
 /**
  * Kept in sync from React by `useTranslationRuntimeSync`. The queue runs outside React, so
  * it reads the config from here rather than from a hook.
  */
 function configFingerprint(value: TranslationConfig): string {
-  return [value.baseUrl, value.apiKey, value.model, value.myLanguage, value.agentLanguage].join(
-    "\u0000",
-  );
+  return [
+    value.provider,
+    value.baseUrl,
+    value.apiKey,
+    value.model,
+    value.reasoningEffort,
+    value.myLanguage,
+    value.agentLanguage,
+  ].join("\u0000");
 }
 
 export function setTranslationConfig(next: TranslationConfig): void {
@@ -71,9 +86,23 @@ export function setTranslationConfig(next: TranslationConfig): void {
   // retire them. Otherwise every message that failed under the old settings stays
   // untranslated until the app restarts.
   if (configFingerprint(previous) !== configFingerprint(next)) {
-    const { status } = useTranslationStore.getState();
+    configGeneration += 1;
+    for (const controller of activeControllers) controller.abort(new Error("Config changed"));
+    activeControllers.clear();
+    queue = new Map();
+    if (flushTimer !== null) clearTimeout(flushTimer);
+    flushTimer = null;
+    const { entries, status } = useTranslationStore.getState();
     if (Object.keys(status).length > 0) {
-      useTranslationStore.setState({ status: {} });
+      const completeEntries: Record<string, string> = {};
+      const completeStatus: Record<string, TranslationStatus> = {};
+      for (const [key, value] of Object.entries(entries)) {
+        if (status[key] === "complete") {
+          completeEntries[key] = value;
+          completeStatus[key] = "complete";
+        }
+      }
+      useTranslationStore.setState({ entries: completeEntries, status: completeStatus });
     }
   }
 }
@@ -86,17 +115,54 @@ function commitEntries(entries: Record<string, string>): void {
   if (Object.keys(entries).length === 0) return;
   useTranslationStore.setState((state) => {
     const status = { ...state.status };
-    for (const key of Object.keys(entries)) delete status[key];
+    for (const key of Object.keys(entries)) status[key] = "complete";
     return { entries: { ...state.entries, ...entries }, status };
+  });
+}
+
+function commitStreaming(entries: Record<string, string>): void {
+  if (Object.keys(entries).length === 0) return;
+  useTranslationStore.setState((state) => {
+    const shouldUpdateStatus = Object.entries(entries).some(
+      ([key, value]) => value.trim().length > 0 && state.status[key] !== "streaming",
+    );
+    const status = shouldUpdateStatus ? { ...state.status } : state.status;
+    for (const [key, value] of Object.entries(entries)) {
+      if (value.trim().length > 0 && status[key] !== "streaming") {
+        status[key] = "streaming";
+      }
+    }
+    return { entries: { ...state.entries, ...entries }, status };
+  });
+}
+
+function markPending(keys: readonly string[]): void {
+  useTranslationStore.setState((state) => {
+    const status = { ...state.status };
+    for (const key of keys) status[key] = "pending";
+    return { status };
   });
 }
 
 function markFailed(keys: readonly string[]): void {
   useTranslationStore.setState((state) => {
     const status = { ...state.status };
-    for (const key of keys) status[key] = "failed";
-    return { status };
+    const entries = { ...state.entries };
+    for (const key of keys) {
+      status[key] = "failed";
+      delete entries[key];
+    }
+    return { entries, status };
   });
+}
+
+function joinAvailablePrefix(parts: readonly TextPart[]): string {
+  const visible: TextPart[] = [];
+  for (const part of parts) {
+    if (part.translate && part.text.trim().length === 0) break;
+    visible.push(part);
+  }
+  return joinParts(visible);
 }
 
 /**
@@ -111,6 +177,11 @@ async function runJobs(
   promptKind: TranslationPromptKind,
   jobs: readonly QueuedJob[],
 ): Promise<void> {
+  const generation = configGeneration;
+  const requestConfig = config;
+  const controller = new AbortController();
+  let stopped = false;
+  activeControllers.add(controller);
   const expanded = jobs.map((job) => ({ job, parts: splitTranslatableParts(job.text) }));
 
   const pending: Array<{ jobIndex: number; partIndex: number; text: string }> = [];
@@ -126,11 +197,12 @@ async function runJobs(
     // Nothing translatable — the message is pure code. Record it as its own translation so
     // it is not re-queued on every render.
     commitEntries(Object.fromEntries(jobs.map((job) => [job.key, job.text])));
+    activeControllers.delete(controller);
     return;
   }
 
   const results: Array<TextPart[]> = expanded.map((entry) =>
-    entry.parts.map((part) => ({ ...part })),
+    entry.parts.map((part) => ({ ...part, text: part.translate ? "" : part.text })),
   );
 
   for (let offset = 0; offset < pending.length; offset += MAX_BATCH_SEGMENTS) {
@@ -139,8 +211,20 @@ async function runJobs(
       const translated = await translateSegments({
         segments: chunk.map((item) => item.text),
         targetLanguage,
-        config,
+        config: requestConfig,
         promptKind,
+        signal: controller.signal,
+        onText: (segmentIndex, value) => {
+          if (stopped || generation !== configGeneration) return;
+          const item = chunk[segmentIndex];
+          if (!item) return;
+          const part = results[item.jobIndex]?.[item.partIndex];
+          if (!part) return;
+          part.text = value;
+          const job = expanded[item.jobIndex]?.job;
+          const parts = results[item.jobIndex];
+          if (job && parts) commitStreaming({ [job.key]: joinAvailablePrefix(parts) });
+        },
       });
       chunk.forEach((item, index) => {
         const value = translated[index];
@@ -149,11 +233,19 @@ async function runJobs(
         if (part) part.text = value;
       });
     } catch (error) {
-      console.warn("[translation] Batch failed", error);
-      markFailed(chunk.map((item) => expanded[item.jobIndex]?.job.key ?? ""));
+      stopped = true;
+      controller.abort(error);
+      if (generation === configGeneration) {
+        console.warn("[translation] Batch failed", error);
+        markFailed(jobs.map((job) => job.key));
+      }
+      activeControllers.delete(controller);
       return;
     }
   }
+
+  activeControllers.delete(controller);
+  if (generation !== configGeneration) return;
 
   const entries: Record<string, string> = {};
   expanded.forEach((entry, jobIndex) => {
@@ -198,13 +290,13 @@ export function requestTranslation(
   if (!isTranslationConfigured(config)) return undefined;
   if (text.trim().length === 0) return undefined;
 
-  const key = entryKey(promptKind, targetLanguage, text);
+  const key = translationEntryKey(promptKind, targetLanguage, text);
   const state = useTranslationStore.getState();
-  const known = state.entries[key];
-  if (known !== undefined) return known;
   // A failed job stays failed for the session. Retrying on every render would turn a bad
   // endpoint into an unbounded request loop.
   if (state.status[key] === "failed") return undefined;
+  const known = state.entries[key];
+  if (known !== undefined) return known;
 
   const cached = translationCache.get(targetLanguage, text, promptKind);
   if (cached !== undefined) {
@@ -217,6 +309,9 @@ export function requestTranslation(
   // The queue itself is the de-dupe, so no store write is needed to mark work in flight.
   if (queue.has(key)) return undefined;
   queue.set(key, { key, text, targetLanguage, promptKind });
+  queueMicrotask(() => {
+    if (queue.has(key)) markPending([key]);
+  });
   if (flushTimer === null) {
     flushTimer = setTimeout(flushQueue, BATCH_WINDOW_MS);
   }
@@ -236,9 +331,10 @@ export function lookupTranslation(
   targetLanguage: string,
   promptKind: TranslationPromptKind = "default",
 ): string | undefined {
-  const key = entryKey(promptKind, targetLanguage, text);
-  const known = useTranslationStore.getState().entries[key];
-  if (known !== undefined) return known;
+  const key = translationEntryKey(promptKind, targetLanguage, text);
+  const state = useTranslationStore.getState();
+  const known = state.entries[key];
+  if (known !== undefined && state.status[key] === "complete") return known;
 
   const cached = translationCache.get(targetLanguage, text, promptKind);
   if (cached === undefined) return undefined;
@@ -262,9 +358,20 @@ export async function translateNow(
   if (!isTranslationConfigured(config)) return text;
   if (text.trim().length === 0) return text;
 
-  const key = entryKey(promptKind, targetLanguage, text);
-  const known = useTranslationStore.getState().entries[key];
-  if (known !== undefined) return known;
+  const key = translationEntryKey(promptKind, targetLanguage, text);
+  const current = useTranslationStore.getState();
+  const known = current.entries[key];
+  if (
+    known !== undefined &&
+    current.status[key] !== "pending" &&
+    current.status[key] !== "streaming"
+  ) {
+    return known;
+  }
+  if (current.status[key] === "pending" || current.status[key] === "streaming") {
+    const inFlight = await waitForTranslation(key);
+    if (inFlight !== undefined) return inFlight;
+  }
   const cached = translationCache.get(targetLanguage, text, promptKind);
   if (cached !== undefined) return cached;
 
@@ -275,6 +382,21 @@ export async function translateNow(
     console.warn("[translation] Input translation failed; sending the original", error);
     return text;
   }
+}
+
+function waitForTranslation(key: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const unsubscribe = useTranslationStore.subscribe((state, previous) => {
+      if (state.status[key] === previous.status[key]) return;
+      if (state.status[key] === "complete") {
+        unsubscribe();
+        resolve(state.entries[key]);
+      } else if (state.status[key] === "failed" || state.status[key] === undefined) {
+        unsubscribe();
+        resolve(undefined);
+      }
+    });
+  });
 }
 
 /**
@@ -288,10 +410,13 @@ export async function translateComposerInput(
   text: string,
   clientMessageId: string,
 ): Promise<string> {
-  const wireText = await translateNow(text, config.agentLanguage);
+  const slash = splitLeadingSlashCommand(text);
+  const translatedBody = await translateNow(slash.body, config.agentLanguage);
+  const wireText = `${slash.prefix}${translatedBody}`;
   if (wireText !== text) {
     useTranslationStore.setState((current) => ({
       originals: { ...current.originals, [clientMessageId]: text },
+      wireTexts: { ...current.wireTexts, [clientMessageId]: wireText },
     }));
   }
   return wireText;
@@ -302,6 +427,13 @@ export function selectPromptOriginal(
   clientMessageId: string | undefined,
 ): string | undefined {
   return clientMessageId === undefined ? undefined : state.originals[clientMessageId];
+}
+
+export function selectPromptWireText(
+  state: TranslationState,
+  clientMessageId: string | undefined,
+): string | undefined {
+  return clientMessageId === undefined ? undefined : state.wireTexts[clientMessageId];
 }
 
 /**
@@ -324,7 +456,22 @@ export function selectTranslation(
   targetLanguage: string,
   promptKind: TranslationPromptKind = "default",
 ): string | undefined {
-  return state.entries[entryKey(promptKind, targetLanguage, text)];
+  return state.entries[translationEntryKey(promptKind, targetLanguage, text)];
+}
+
+export function selectTranslationStatus(
+  state: TranslationState,
+  text: string,
+  targetLanguage: string,
+  promptKind: TranslationPromptKind = "default",
+): TranslationStatus | undefined {
+  return state.status[translationEntryKey(promptKind, targetLanguage, text)];
+}
+
+export function splitLeadingSlashCommand(text: string): { prefix: string; body: string } {
+  const command = text.match(/^(\s*\/\S+)(\s*)([\s\S]*)$/);
+  if (!command) return { prefix: "", body: text };
+  return { prefix: `${command[1]}${command[2]}`, body: command[3] ?? "" };
 }
 
 /** Test seam: drop all queued work and memoized results. */
@@ -332,6 +479,9 @@ export function resetTranslationStoreForTest(): void {
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
   queue = new Map();
+  configGeneration += 1;
+  for (const controller of activeControllers) controller.abort(new Error("Test reset"));
+  activeControllers.clear();
   config = DEFAULT_TRANSLATION_CONFIG;
-  useTranslationStore.setState({ entries: {}, status: {}, originals: {} }, true);
+  useTranslationStore.setState({ entries: {}, status: {}, originals: {}, wireTexts: {} }, true);
 }

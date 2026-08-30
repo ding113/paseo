@@ -9,8 +9,11 @@ import { translationCache } from "./cache";
 import {
   requestTranslation,
   selectPromptOriginal,
+  selectPromptWireText,
   selectTranslation,
+  selectTranslationStatus,
   setTranslationConfig,
+  type TranslationStatus,
   useTranslationStore,
 } from "./store";
 
@@ -78,6 +81,25 @@ export function useTranslatedAgentOutputForReader(
   return useTranslatedText(text, config.myLanguage, "agent-output");
 }
 
+export interface TranslationRenderState {
+  enabled: boolean;
+  text: string | undefined;
+  status: TranslationStatus | undefined;
+}
+
+/** Observe an agent-output translation without starting work from a hidden message row. */
+export function useAgentOutputTranslationState(text: string): TranslationRenderState {
+  const config = useTranslationConfig();
+  const enabled = isTranslationConfigured(config);
+  const translatedText = useTranslationStore((state) =>
+    selectTranslation(state, text, config.myLanguage, "agent-output"),
+  );
+  const status = useTranslationStore((state) =>
+    selectTranslationStatus(state, text, config.myLanguage, "agent-output"),
+  );
+  return { enabled, text: translatedText, status };
+}
+
 /**
  * Like `useTranslatedForReader`, but falls back to the input. Use at call sites where an
  * inline `?? original` would add a branch to an already-branchy component.
@@ -96,4 +118,8 @@ export function useReaderText(text: string): string {
  */
 export function useOriginalUserText(clientMessageId: string | undefined): string | undefined {
   return useTranslationStore((state) => selectPromptOriginal(state, clientMessageId));
+}
+
+export function useWireUserText(clientMessageId: string | undefined): string | undefined {
+  return useTranslationStore((state) => selectPromptWireText(state, clientMessageId));
 }
