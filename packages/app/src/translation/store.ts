@@ -422,6 +422,11 @@ export async function translateComposerInput(
   return wireText;
 }
 
+/** Translate free-form interactive UI input into the language used by the agent. */
+export function translateTextForAgent(text: string): Promise<string> {
+  return translateNow(text, config.agentLanguage);
+}
+
 export function selectPromptOriginal(
   state: TranslationState,
   clientMessageId: string | undefined,

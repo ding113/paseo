@@ -100,6 +100,28 @@ export function useAgentOutputTranslationState(text: string): TranslationRenderS
   return { enabled, text: translatedText, status };
 }
 
+/** Request and observe structured agent text rendered outside the assistant timeline row. */
+export function useRequestedAgentOutputTranslationState(
+  text: string | null | undefined,
+): TranslationRenderState {
+  const config = useTranslationConfig();
+  const source = text ?? "";
+  const enabled = isTranslationConfigured(config);
+  const translatedText = useTranslationStore((state) =>
+    source ? selectTranslation(state, source, config.myLanguage, "agent-output") : undefined,
+  );
+  const status = useTranslationStore((state) =>
+    source ? selectTranslationStatus(state, source, config.myLanguage, "agent-output") : undefined,
+  );
+
+  useEffect(() => {
+    if (!enabled || !source.trim()) return;
+    requestTranslation(source, config.myLanguage, "agent-output");
+  }, [config.myLanguage, enabled, source]);
+
+  return { enabled, text: translatedText, status };
+}
+
 /**
  * Like `useTranslatedForReader`, but falls back to the input. Use at call sites where an
  * inline `?? original` would add a branch to an already-branchy component.
