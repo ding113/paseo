@@ -1909,6 +1909,28 @@ export const ar: TranslationResources = {
       title: "الترجمة",
       enabled: "ترجمة الرسائل",
       enabledHint: "ترجمة ردود الوكيل إلى لغتك، ورسائلك إلى لغة الوكيل قبل الإرسال.",
+      provider: {
+        label: "المزوّد",
+        hint: "اختر بروتوكول API للترجمة.",
+        options: {
+          "openai-compatible": "OpenAI Compatible",
+          openai: "OpenAI",
+          anthropic: "Anthropic",
+          google: "Google Gemini",
+        },
+      },
+      reasoningEffort: {
+        label: "جهد الاستدلال",
+        hint: "يُطبق عندما تدعم نقطة النهاية التحكم في الاستدلال.",
+        options: { default: "افتراضي", low: "منخفض", medium: "متوسط", high: "مرتفع" },
+      },
+      test: {
+        title: "الاتصال",
+        hint: "إرسال ترجمة قصيرة متدفقة.",
+        action: "اختبار الاتصال",
+        success: "تم الاتصال بنجاح.",
+        error: "فشل الاتصال: {{message}}",
+      },
       myLanguage: {
         label: "لغتك",
         hint: "تُترجم ردود الوكيل وأسماؤه إلى هذه اللغة.",

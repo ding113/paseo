@@ -1942,6 +1942,28 @@ export const ru: TranslationResources = {
       enabled: "Переводить сообщения",
       enabledHint:
         "Переводит ответы агента на ваш язык, а ваши сообщения — на язык агента перед отправкой.",
+      provider: {
+        label: "Провайдер",
+        hint: "Выберите протокол API для перевода.",
+        options: {
+          "openai-compatible": "Совместимый с OpenAI",
+          openai: "OpenAI",
+          anthropic: "Anthropic",
+          google: "Google Gemini",
+        },
+      },
+      reasoningEffort: {
+        label: "Уровень рассуждения",
+        hint: "Применяется, только если endpoint поддерживает настройку.",
+        options: { default: "По умолчанию", low: "Низкий", medium: "Средний", high: "Высокий" },
+      },
+      test: {
+        title: "Соединение",
+        hint: "Отправляет короткий потоковый перевод.",
+        action: "Проверить соединение",
+        success: "Соединение установлено.",
+        error: "Ошибка соединения: {{message}}",
+      },
       myLanguage: {
         label: "Ваш язык",
         hint: "Ответы и названия агента переводятся на этот язык.",

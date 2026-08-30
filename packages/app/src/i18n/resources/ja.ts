@@ -1929,6 +1929,28 @@ export const ja: TranslationResources = {
       enabled: "メッセージを翻訳",
       enabledHint:
         "エージェントの返答をあなたの言語に、送信前にあなたの入力をエージェントの言語に翻訳します。",
+      provider: {
+        label: "プロバイダー",
+        hint: "翻訳に使う API プロトコルを選択します。",
+        options: {
+          "openai-compatible": "OpenAI Compatible",
+          openai: "OpenAI",
+          anthropic: "Anthropic",
+          google: "Google Gemini",
+        },
+      },
+      reasoningEffort: {
+        label: "推論強度",
+        hint: "選択したエンドポイントが対応する場合のみ適用されます。",
+        options: { default: "デフォルト", low: "低", medium: "中", high: "高" },
+      },
+      test: {
+        title: "接続",
+        hint: "短いストリーミング翻訳を送信します。",
+        action: "接続をテスト",
+        success: "接続に成功しました。",
+        error: "接続に失敗しました：{{message}}",
+      },
       myLanguage: {
         label: "あなたの言語",
         hint: "エージェントの返答と名前はこの言語に翻訳されます。",

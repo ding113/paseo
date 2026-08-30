@@ -1,11 +1,25 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { Field, FormTextInput } from "@/components/ui/form-field";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { useAppSettings } from "@/hooks/use-settings";
 import { settingsStyles } from "@/styles/settings";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
+import {
+  testTranslationConnection,
+  TRANSLATION_PROVIDER_DEFAULTS,
+  type TranslationConfig,
+  type TranslationProvider,
+  type TranslationReasoningEffort,
+} from "@/translation/client";
 
 type TextKey = "baseUrl" | "apiKey" | "model" | "myLanguage" | "agentLanguage";
 
@@ -14,6 +28,7 @@ interface TranslationTextFieldProps {
   value: string;
   secure?: boolean;
   onCommit: (key: TextKey, value: string) => void;
+  onDraft: (key: TextKey, value: string) => void;
 }
 
 const TranslationTextField = memo(function TranslationTextField({
@@ -21,6 +36,7 @@ const TranslationTextField = memo(function TranslationTextField({
   value,
   secure,
   onCommit,
+  onDraft,
 }: TranslationTextFieldProps) {
   const { t } = useTranslation();
   // The input is uncontrolled, so in-progress text lives in a ref: a keystroke should not
@@ -31,9 +47,13 @@ const TranslationTextField = memo(function TranslationTextField({
     draft.current = value;
   }, [value]);
 
-  const handleChangeText = useCallback((next: string) => {
-    draft.current = next;
-  }, []);
+  const handleChangeText = useCallback(
+    (next: string) => {
+      draft.current = next;
+      onDraft(fieldKey, next);
+    },
+    [fieldKey, onDraft],
+  );
 
   const handleBlur = useCallback(() => {
     onCommit(fieldKey, draft.current);
@@ -59,24 +79,172 @@ const TranslationTextField = memo(function TranslationTextField({
   );
 });
 
+const PROVIDERS: TranslationProvider[] = ["openai-compatible", "openai", "anthropic", "google"];
+const EFFORTS: TranslationReasoningEffort[] = ["default", "low", "medium", "high"];
+
+function SelectRow<T extends string>({
+  label,
+  hint,
+  value,
+  options,
+  labelFor,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  value: T;
+  options: readonly T[];
+  labelFor: (value: T) => string;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <View style={settingsStyles.card}>
+      <DropdownMenu>
+        <DropdownMenuTrigger style={settingsStyles.row} accessibilityRole="button">
+          <View style={settingsStyles.rowContent}>
+            <Text style={settingsStyles.rowTitle}>{label}</Text>
+            <Text style={settingsStyles.rowHint}>{hint}</Text>
+          </View>
+          <Text style={settingsStyles.rowTitle}>{labelFor(value)}</Text>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="bottom" align="end" width={240}>
+          {options.map((option) => (
+            <SelectMenuItem
+              key={option}
+              option={option}
+              selectedValue={value}
+              label={labelFor(option)}
+              onChange={onChange}
+            />
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </View>
+  );
+}
+
+function SelectMenuItem<T extends string>({
+  option,
+  selectedValue,
+  label,
+  onChange,
+}: {
+  option: T;
+  selectedValue: T;
+  label: string;
+  onChange: (value: T) => void;
+}) {
+  const handleSelect = useCallback(() => onChange(option), [onChange, option]);
+  return (
+    <DropdownMenuItem selected={option === selectedValue} onSelect={handleSelect}>
+      {label}
+    </DropdownMenuItem>
+  );
+}
+
 export function TranslationSection() {
   const { t } = useTranslation();
   const { settings, updateSettings } = useAppSettings();
   const config = settings.translation;
+  const draftsRef = useRef<TranslationConfig>(config);
+  const testSequenceRef = useRef(0);
+  const [testState, setTestState] = useState<"idle" | "pending" | "success" | "error">("idle");
+  const [testError, setTestError] = useState("");
+  const providerLabel = useCallback(
+    (value: TranslationProvider) => t(`settings.translation.provider.options.${value}`),
+    [t],
+  );
+  const effortLabel = useCallback(
+    (value: TranslationReasoningEffort) =>
+      t(`settings.translation.reasoningEffort.options.${value}`),
+    [t],
+  );
+
+  useEffect(() => {
+    draftsRef.current = config;
+  }, [config]);
 
   const handleEnabledChange = useCallback(
-    (enabled: boolean) => void updateSettings({ translation: { ...config, enabled } }),
-    [config, updateSettings],
+    (enabled: boolean) => {
+      const next = { ...draftsRef.current, enabled };
+      draftsRef.current = next;
+      void updateSettings({ translation: next });
+    },
+    [updateSettings],
   );
 
   const handleCommit = useCallback(
     (key: TextKey, next: string) => {
       const value = next.trim();
       if (value === config[key]) return;
-      void updateSettings({ translation: { ...config, [key]: value } });
+      const translation = { ...draftsRef.current, [key]: value };
+      draftsRef.current = translation;
+      void updateSettings({ translation });
     },
     [config, updateSettings],
   );
+
+  const handleDraft = useCallback((key: TextKey, value: string) => {
+    draftsRef.current = { ...draftsRef.current, [key]: value };
+    testSequenceRef.current += 1;
+    setTestState("idle");
+  }, []);
+
+  const handleProviderChange = useCallback(
+    (provider: TranslationProvider) => {
+      const next = {
+        ...draftsRef.current,
+        provider,
+        ...TRANSLATION_PROVIDER_DEFAULTS[provider],
+      };
+      draftsRef.current = next;
+      testSequenceRef.current += 1;
+      setTestState("idle");
+      void updateSettings({ translation: next });
+    },
+    [updateSettings],
+  );
+
+  const handleEffortChange = useCallback(
+    (reasoningEffort: TranslationReasoningEffort) => {
+      const next = { ...draftsRef.current, reasoningEffort };
+      draftsRef.current = next;
+      testSequenceRef.current += 1;
+      setTestState("idle");
+      void updateSettings({ translation: next });
+    },
+    [updateSettings],
+  );
+
+  const handleTestConnection = useCallback(async () => {
+    const sequence = testSequenceRef.current + 1;
+    testSequenceRef.current = sequence;
+    const candidate = {
+      ...draftsRef.current,
+      baseUrl: draftsRef.current.baseUrl.trim(),
+      apiKey: draftsRef.current.apiKey.trim(),
+      model: draftsRef.current.model.trim(),
+      myLanguage: draftsRef.current.myLanguage.trim(),
+      agentLanguage: draftsRef.current.agentLanguage.trim(),
+    };
+    setTestState("pending");
+    setTestError("");
+    try {
+      await testTranslationConnection(candidate);
+      if (testSequenceRef.current === sequence) setTestState("success");
+    } catch (error) {
+      if (testSequenceRef.current === sequence) {
+        setTestError(error instanceof Error ? error.message : String(error));
+        setTestState("error");
+      }
+    }
+  }, []);
+
+  let testStatus = t("settings.translation.test.hint");
+  if (testState === "success") testStatus = t("settings.translation.test.success");
+  else if (testState === "error") {
+    testStatus = t("settings.translation.test.error", { message: testError });
+  }
 
   return (
     <SettingsSection title={t("settings.translation.title")}>
@@ -94,24 +262,72 @@ export function TranslationSection() {
           />
         </View>
       </View>
+      <SelectRow
+        label={t("settings.translation.provider.label")}
+        hint={t("settings.translation.provider.hint")}
+        value={config.provider}
+        options={PROVIDERS}
+        labelFor={providerLabel}
+        onChange={handleProviderChange}
+      />
+      <SelectRow
+        label={t("settings.translation.reasoningEffort.label")}
+        hint={t("settings.translation.reasoningEffort.hint")}
+        value={config.reasoningEffort}
+        options={EFFORTS}
+        labelFor={effortLabel}
+        onChange={handleEffortChange}
+      />
       <TranslationTextField
         fieldKey="myLanguage"
         value={config.myLanguage}
         onCommit={handleCommit}
+        onDraft={handleDraft}
       />
       <TranslationTextField
         fieldKey="agentLanguage"
         value={config.agentLanguage}
         onCommit={handleCommit}
+        onDraft={handleDraft}
       />
-      <TranslationTextField fieldKey="baseUrl" value={config.baseUrl} onCommit={handleCommit} />
+      <TranslationTextField
+        fieldKey="baseUrl"
+        value={config.baseUrl}
+        onCommit={handleCommit}
+        onDraft={handleDraft}
+      />
       <TranslationTextField
         fieldKey="apiKey"
         value={config.apiKey}
         secure
         onCommit={handleCommit}
+        onDraft={handleDraft}
       />
-      <TranslationTextField fieldKey="model" value={config.model} onCommit={handleCommit} />
+      <TranslationTextField
+        fieldKey="model"
+        value={config.model}
+        onCommit={handleCommit}
+        onDraft={handleDraft}
+      />
+      <View style={settingsStyles.card}>
+        <View style={settingsStyles.row}>
+          <View style={settingsStyles.rowContent}>
+            <Text style={settingsStyles.rowTitle}>{t("settings.translation.test.title")}</Text>
+            <Text style={settingsStyles.rowHint} testID="translation-test-status">
+              {testStatus}
+            </Text>
+          </View>
+          <Button
+            size="sm"
+            variant="outline"
+            loading={testState === "pending"}
+            onPress={handleTestConnection}
+            testID="translation-test-button"
+          >
+            {t("settings.translation.test.action")}
+          </Button>
+        </View>
+      </View>
     </SettingsSection>
   );
 }

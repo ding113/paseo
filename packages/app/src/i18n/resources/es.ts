@@ -1957,6 +1957,28 @@ export const es: TranslationResources = {
       enabled: "Traducir mensajes",
       enabledHint:
         "Traduce las respuestas del agente a tu idioma y tus mensajes al idioma del agente antes de enviarlos.",
+      provider: {
+        label: "Proveedor",
+        hint: "Elige el protocolo API de traducción.",
+        options: {
+          "openai-compatible": "Compatible con OpenAI",
+          openai: "OpenAI",
+          anthropic: "Anthropic",
+          google: "Google Gemini",
+        },
+      },
+      reasoningEffort: {
+        label: "Esfuerzo de razonamiento",
+        hint: "Solo se aplica si el endpoint lo admite.",
+        options: { default: "Predeterminado", low: "Bajo", medium: "Medio", high: "Alto" },
+      },
+      test: {
+        title: "Conexión",
+        hint: "Envía una traducción corta en streaming.",
+        action: "Probar conexión",
+        success: "Conexión correcta.",
+        error: "Error de conexión: {{message}}",
+      },
       myLanguage: {
         label: "Tu idioma",
         hint: "Las respuestas y los nombres del agente se traducen a este idioma.",
