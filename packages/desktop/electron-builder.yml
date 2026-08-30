@@ -44,6 +44,8 @@ mac:
   notarize: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
+  extendInfo:
+    ITSAppUsesNonExemptEncryption: false
   extraResources:
     - from: bin/paseo
       to: bin/paseo
@@ -59,9 +61,6 @@ mas:
   provisioningProfile: build/Paseo_AppStore.provisionprofile
   hardenedRuntime: false
   notarize: false
-  extendInfo:
-    ITSAppUsesNonExemptEncryption: false
-    NSMicrophoneUsageDescription: Paseo uses the microphone when you choose an audio input feature.
 linux:
   category: Development
   icon: assets
