@@ -17,4 +17,15 @@ describe("user message translation display", () => {
       resolveUserMessageText({ message: "Hello", originalMessage: "Hello", showOriginal: true }),
     ).toBe("Hello");
   });
+
+  it("shows the recorded wire translation for an optimistic mid-session row", () => {
+    expect(
+      resolveUserMessageText({
+        message: "你好",
+        wireMessage: "Hello",
+        originalMessage: "你好",
+        showOriginal: false,
+      }),
+    ).toBe("Hello");
+  });
 });
