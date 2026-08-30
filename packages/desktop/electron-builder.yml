@@ -52,6 +52,16 @@ mac:
   target:
     - dmg
     - zip
+mas:
+  artifactName: "Paseo-${version}-${arch}-mas.${ext}"
+  entitlements: build/entitlements.mas.plist
+  entitlementsInherit: build/entitlements.mas.inherit.plist
+  provisioningProfile: build/Paseo_AppStore.provisionprofile
+  hardenedRuntime: false
+  notarize: false
+  extendInfo:
+    ITSAppUsesNonExemptEncryption: false
+    NSMicrophoneUsageDescription: Paseo uses the microphone when you choose an audio input feature.
 linux:
   category: Development
   icon: assets
