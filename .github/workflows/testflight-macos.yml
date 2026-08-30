@@ -13,7 +13,7 @@ on:
         default: false
         type: boolean
       what_to_test:
-        description: "Optional TestFlight What to Test notes"
+        description: "Optional override; defaults to the latest commit message"
         required: false
         type: string
 
@@ -51,6 +51,54 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve What to Test notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const fs = require("node:fs");
+
+          const explicitNotes = process.env.WHAT_TO_TEST.trim();
+          let notes = explicitNotes;
+
+          if (!notes) {
+            const message = execFileSync("git", ["log", "-1", "--pretty=%B"], {
+              encoding: "utf8",
+            }).trim();
+            const [subject = "", ...bodyLines] = message.split(/\r?\n/);
+            const match = subject.match(
+              /^(feat|fix|refactor|perf|docs|chore|build|ci|test|style)(?:\([^)]+\))?!?:\s*(.+)$/i,
+            );
+            const labels = {
+              feat: "Added",
+              fix: "Fixed",
+              refactor: "Improved",
+              perf: "Improved",
+              docs: "Updated",
+              chore: "Updated",
+              build: "Updated",
+              ci: "Updated",
+              test: "Updated",
+              style: "Updated",
+            };
+            const summary = match
+              ? `${labels[match[1].toLowerCase()]}: ${match[2]}`
+              : subject || `Build ${process.env.GITHUB_SHA.slice(0, 7)}`;
+            const body = bodyLines.join("\n").trim();
+            notes = ["Changes in this build:", summary, body].filter(Boolean).join("\n\n");
+          }
+
+          notes = notes.slice(0, 4000);
+          const delimiter = `PASEO_NOTES_${process.env.GITHUB_RUN_ID}_${process.env.GITHUB_RUN_ATTEMPT}`;
+          fs.appendFileSync(
+            process.env.GITHUB_ENV,
+            `WHAT_TO_TEST<<${delimiter}\n${notes}\n${delimiter}\n`,
+          );
+          console.log(notes);
+          NODE
 
       - name: Validate configuration
         shell: bash
