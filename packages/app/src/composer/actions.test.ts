@@ -418,6 +418,43 @@ describe("pickAndPersistImages", () => {
 });
 
 describe("dispatchComposerAgentMessage", () => {
+  it("translates every input, including a follow-up sent during an active Session", async () => {
+    const client = createFakeSendClient();
+    const stream = createFakeStream();
+    const translate = vi.fn(async (text: string) => `translated:${text}`);
+
+    await dispatchComposerAgentMessage({
+      client,
+      agentId: "agent",
+      text: "first input",
+      attachments: [],
+      encodeImages: async () => [],
+      submission: stream,
+      translate,
+    });
+    await dispatchComposerAgentMessage({
+      client,
+      agentId: "agent",
+      text: "mid-session input",
+      attachments: [],
+      encodeImages: async () => [],
+      submission: stream,
+      activeTurnBehavior: "steer",
+      activeTurnId: "turn-1",
+      translate,
+    });
+
+    expect(translate).toHaveBeenCalledTimes(2);
+    expect(translate.mock.calls.map(([text]) => text)).toEqual([
+      "first input",
+      "mid-session input",
+    ]);
+    expect(client.calls.map((call) => call.text)).toEqual([
+      "translated:first input",
+      "translated:mid-session input",
+    ]);
+  });
+
   it("forwards the configured active-turn intent without provider capability checks", async () => {
     const client = createFakeSendClient();
     const stream = createFakeStream();

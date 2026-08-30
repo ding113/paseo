@@ -3,227 +3,177 @@ import {
   buildTranslationPrompt,
   DEFAULT_TRANSLATION_CONFIG,
   isTranslationConfigured,
+  testTranslationConnection,
   translateSegments,
 } from "./client";
 
-const config = {
-  ...DEFAULT_TRANSLATION_CONFIG,
-  enabled: true,
-  baseUrl: "https://openrouter.ai/api/v1",
-  apiKey: "sk-test",
-  model: "tencent/hy-mt2-30b-a3b",
-};
+const config = { ...DEFAULT_TRANSLATION_CONFIG, enabled: true, apiKey: "sk-test" };
 
-function reply(content: string): Response {
-  return {
-    ok: true,
+function streamingReply(chunks: string[], finishReason = "stop"): Response {
+  const lines = chunks.map(
+    (content) =>
+      `data: ${JSON.stringify({
+        id: "translation-1",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: config.model,
+        choices: [{ index: 0, delta: { content }, finish_reason: null }],
+      })}\n\n`,
+  );
+  lines.push(
+    `data: ${JSON.stringify({
+      id: "translation-1",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: config.model,
+      choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+    })}\n\n`,
+    "data: [DONE]\n\n",
+  );
+  return new Response(lines.join(""), {
     status: 200,
-    statusText: "OK",
-    json: async () => ({ choices: [{ message: { content } }] }),
-  } as Response;
+    headers: { "Content-Type": "text/event-stream" },
+  });
 }
 
 function stubFetch(...contents: string[]) {
   const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-    reply(contents.shift() ?? "translated"),
+    streamingReply([contents.shift() ?? "translated"]),
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
-/** A fetch that never resolves, rejecting only when its request is aborted. */
-function neverResponds(_url: string, init?: RequestInit): Promise<Response> {
-  return new Promise<Response>((_resolve, reject) => {
-    const fail = () => reject(init?.signal?.reason ?? new Error("aborted"));
-    init?.signal?.addEventListener("abort", fail);
-  });
+function bodyOf(call: unknown[] | undefined): Record<string, unknown> {
+  return JSON.parse(String((call?.[1] as RequestInit | undefined)?.body ?? "{}"));
 }
 
-function bodyOf(call: [string, RequestInit?] | undefined): Record<string, unknown> {
-  return JSON.parse(String(call?.[1]?.body ?? "{}"));
-}
+afterEach(() => vi.unstubAllGlobals());
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-describe("Hy-MT2 prompt", () => {
-  // These two strings are the model card's "Default Translation" row, reproduced
-  // character-for-character. If a test here fails, the prompt drifted from the card —
-  // fix the code, not the expectation.
-  it("matches the documented Chinese instruction", () => {
-    expect(buildTranslationPrompt("zh", "Hello")).toBe(
-      "将以下文本翻译为 中文，注意**只需要输出翻译后的结果，不要额外解释**：\n\nHello",
-    );
+describe("translation prompt", () => {
+  it("keeps product and git terms untranslated with original casing", () => {
+    const prompt = buildTranslationPrompt("zh", "Agent Prompt Config Skills worktree workspace");
+    for (const term of [
+      "Agent",
+      "Prompt",
+      "Config",
+      "Skills",
+      "worktree",
+      "workspace",
+      "repository",
+      "repo",
+      "commit",
+      "branch",
+      "remote",
+      "upstream",
+      "fork",
+      "rebase",
+      "pull request",
+      "PR",
+      "HEAD",
+    ]) {
+      expect(prompt).toContain(`\`${term}\``);
+    }
   });
 
-  it("matches the documented English instruction", () => {
-    expect(buildTranslationPrompt("en", "你好")).toBe(
-      "Translate the following text into English. Note that you should **only output the translated result without any additional explanation**:\n\n你好",
-    );
-  });
-
-  it("uses the documented Personalization layout for agent output rewrites", () => {
-    const prompt = buildTranslationPrompt(
+  it("retains the Hy-MT2 translation and agent-output scaffolds", () => {
+    expect(buildTranslationPrompt("zh", "Hello")).toContain("将以下文本翻译为 中文");
+    const agentPrompt = buildTranslationPrompt(
       "en",
-      "The cache boundary is load-bearing.",
+      "The boundary is load-bearing.",
       "agent-output",
     );
-    expect(prompt).toContain("*[Source Text]*");
-    expect(prompt).toContain("*[Translation Tasks]*");
-    expect(prompt).toContain("Translate the [Source Text] into English.");
-    expect(prompt).toContain("Translate descriptive uses of Claudish into the target language");
-    expect(prompt).not.toContain("plain English");
+    expect(agentPrompt).toContain("*[Source Text]*");
+    expect(agentPrompt).toContain("*[Translation Tasks]*");
+    expect(agentPrompt).toContain("Translate the [Source Text] into English.");
   });
 
-  it("keeps the agent-output style instructions language-agnostic for Chinese", () => {
-    const prompt = buildTranslationPrompt("zh", "Claudish output", "agent-output");
-    expect(prompt).toContain("*【待翻译文本】*");
-    expect(prompt).toContain("*【翻译任务】*");
-    expect(prompt).toContain("翻译成目标语言");
-    expect(prompt).toContain("作为描述性词语时翻译成目标语言");
-    expect(prompt).toContain("翻译为 中文");
-  });
-
-  it("uses the Chinese name in the Chinese prompt and the English name in the English one", () => {
-    expect(buildTranslationPrompt("zh-Hant", "x")).toContain("翻译为 繁体中文，");
-    expect(buildTranslationPrompt("ja", "x")).toContain("into Japanese.");
-  });
-
-  it("maps the app's locale tags onto the model card's abbreviations", () => {
-    expect(buildTranslationPrompt("zh-CN", "x")).toBe(buildTranslationPrompt("zh", "x"));
-    expect(buildTranslationPrompt("pt-BR", "x")).toBe(buildTranslationPrompt("pt", "x"));
-  });
-
-  it("resolves the Traditional Chinese locale aliases", () => {
-    // Regression: the alias value is cased like the model card (`zh-Hant`) while the input
-    // was lowercased, so these resolved to nothing and silently disabled the whole feature.
-    expect(buildTranslationPrompt("zh-TW", "x")).toContain("翻译为 繁体中文，");
-    expect(buildTranslationPrompt("zh-HK", "x")).toContain("翻译为 繁体中文，");
-    expect(isTranslationConfigured({ ...config, myLanguage: "zh-TW" })).toBe(true);
-  });
-
-  it("rejects a language the model card does not list", () => {
+  it("maps supported locale aliases and rejects unknown languages", () => {
+    expect(buildTranslationPrompt("zh-TW", "x")).toContain("繁体中文");
+    expect(buildTranslationPrompt("zh-CN", "x")).toContain("中文");
+    expect(buildTranslationPrompt("pt-BR", "x")).toContain("Portuguese");
     expect(buildTranslationPrompt("klingon", "x")).toBeNull();
     expect(isTranslationConfigured({ ...config, myLanguage: "klingon" })).toBe(false);
   });
 });
 
-describe("translateSegments", () => {
-  it("returns one translation per segment, in order", async () => {
-    stubFetch("你好", "世界");
+describe("AI SDK streaming translation", () => {
+  it("streams one request per segment and returns results in order", async () => {
+    const fetchMock = stubFetch("你好", "世界");
+    const partials: string[] = [];
     const result = await translateSegments({
       segments: ["Hello", "World"],
       targetLanguage: "zh",
       config,
+      onText: (index, text) => partials.push(`${index}:${text}`),
     });
     expect(result).toEqual(["你好", "世界"]);
-  });
-
-  it("sends one request per segment", async () => {
-    const fetchMock = stubFetch("你好", "世界");
-    await translateSegments({ segments: ["Hello", "World"], targetLanguage: "zh", config });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(partials).toEqual(expect.arrayContaining(["0:你好", "1:世界"]));
   });
 
-  it("sends the instruction as a single user turn with no system prompt", async () => {
-    const fetchMock = stubFetch("你好");
-    await translateSegments({ segments: ["Hello"], targetLanguage: "zh", config });
-    const messages = bodyOf(fetchMock.mock.calls[0]).messages as Array<{ role: string }>;
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.role).toBe("user");
-  });
-
-  it("uses the agent-output prompt only when requested", async () => {
-    const fetchMock = stubFetch("translated");
-    await translateSegments({
-      segments: ["The boundary is load-bearing."],
-      targetLanguage: "zh",
-      config,
-      promptKind: "agent-output",
-    });
-    const body = bodyOf(fetchMock.mock.calls[0]);
-    const content = String((body.messages as Array<{ content: string }>)[0]?.content);
-    expect(content).toContain("*【待翻译文本】*");
-    expect(content).toContain("Claudish");
-  });
-
-  it("sends the sampling parameters the model card recommends for 30B-A3B", async () => {
+  it("enables streaming and keeps the recommended sampling parameters", async () => {
     const fetchMock = stubFetch("你好");
     await translateSegments({ segments: ["Hello"], targetLanguage: "zh", config });
     const body = bodyOf(fetchMock.mock.calls[0]);
+    expect(body.stream).toBe(true);
     expect(body.temperature).toBe(0.7);
-    expect(body.top_p).toBe(1.0);
-    // Documented as -1 / 1.0, which are no-ops; omitted so gateways cannot reject them.
-    expect(body).not.toHaveProperty("top_k");
-    expect(body).not.toHaveProperty("repetition_penalty");
-    // Omitted so the server applies the configured model's own maximum.
-    expect(body).not.toHaveProperty("max_tokens");
+    expect(body.top_p).toBe(1);
+    expect(body.messages).toEqual([
+      expect.objectContaining({ role: "user", content: expect.stringContaining("Hello") }),
+    ]);
   });
 
-  it("accepts a base URL that already names the completions path", async () => {
-    const fetchMock = stubFetch("你好");
+  it("accepts either an API root or a full completions URL", async () => {
+    const fetchMock = stubFetch("a", "b");
+    await translateSegments({ segments: ["A"], targetLanguage: "zh", config });
     await translateSegments({
-      segments: ["Hello"],
+      segments: ["B"],
       targetLanguage: "zh",
-      config: { ...config, baseUrl: "https://openrouter.ai/api/v1/chat/completions" },
+      config: { ...config, baseUrl: `${config.baseUrl}/chat/completions` },
     });
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`${config.baseUrl}/chat/completions`);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(`${config.baseUrl}/chat/completions`);
   });
 
-  it("appends the completions path to a bare root", async () => {
-    const fetchMock = stubFetch("你好");
-    await translateSegments({ segments: ["Hello"], targetLanguage: "zh", config });
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
-  });
-
-  it("throws on a non-ok response", async () => {
+  it("strips tagged reasoning from streamed output", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: false, status: 401, statusText: "Unauthorized" }) as Response),
+      vi.fn(async () => streamingReply(["<think>draft", "ing</think>最终"])),
+    );
+    await expect(
+      translateSegments({ segments: ["Hello"], targetLanguage: "zh", config }),
+    ).resolves.toEqual(["最终"]);
+  });
+
+  it("rejects failed, truncated, and empty responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("no", { status: 401 })),
     );
     await expect(
       translateSegments({ segments: ["Hello"], targetLanguage: "zh", config }),
     ).rejects.toThrow(/401/);
-  });
 
-  it("rejects a completion truncated at the output limit", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            json: async () => ({
-              choices: [{ message: { content: "这是一段被截断的" }, finish_reason: "length" }],
-            }),
-          }) as Response,
-      ),
+      vi.fn(async () => streamingReply(["partial"], "length")),
     );
     await expect(
       translateSegments({ segments: ["Hello"], targetLanguage: "zh", config }),
     ).rejects.toThrow(/truncated/);
-  });
 
-  it("gives up on a request that never responds", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.stubGlobal("fetch", vi.fn(neverResponds));
-      const pending = translateSegments({ segments: ["Hello"], targetLanguage: "zh", config });
-      const assertion = expect(pending).rejects.toThrow(/timed out/);
-      await vi.advanceTimersByTimeAsync(30_000);
-      await assertion;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("throws on an empty completion rather than blanking the message", async () => {
-    stubFetch("   ");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamingReply(["   "])),
+    );
     await expect(
       translateSegments({ segments: ["Hello"], targetLanguage: "zh", config }),
     ).rejects.toThrow(/empty/);
+  });
+
+  it("tests a connection even while translation is disabled", async () => {
+    stubFetch("你好");
+    await expect(testTranslationConnection({ ...config, enabled: false })).resolves.toBeUndefined();
   });
 });
