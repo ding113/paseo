@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import React, { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   Pressable,
   Text,
@@ -16,6 +16,8 @@ import { isWeb } from "@/constants/platform";
 import type { Theme } from "@/styles/theme";
 import { getMarkdownListMarker } from "@/utils/markdown-list";
 import { createMarkdownParser } from "@/utils/markdown-parser";
+import { useRequestedAgentOutputTranslationState } from "@/translation/use-translation";
+import { resolveRequestedTranslation } from "@/translation/presentation";
 
 // Without this prop react-native-markdown-display builds its own parser with
 // `typographer: true`, which would render a plan's literal `(c)` as ©. Its
@@ -221,9 +223,18 @@ function PlanCardContent({
   testID,
 }: PlanCardProps) {
   const { t } = useTranslation();
+  const textTranslation = useRequestedAgentOutputTranslationState(text);
+  const titleTranslation = useRequestedAgentOutputTranslationState(title);
+  const descriptionTranslation = useRequestedAgentOutputTranslationState(description);
+  const resolvedDescription = description
+    ? resolveRequestedTranslation(description, descriptionTranslation)
+    : undefined;
+  const resolvedText = resolveRequestedTranslation(text, textTranslation);
   const [expanded, setExpanded] = useState(outcome !== "rejected" && outcome !== "canceled");
   const labels = {
-    pending: title ?? t("agentStream.permission.plan"),
+    pending: title
+      ? resolveRequestedTranslation(title, titleTranslation)
+      : t("agentStream.permission.plan"),
     rejected: t("agentStream.permission.rejectedPlan"),
     approved: t("agentStream.permission.approvedPlan"),
     canceled: t("agentStream.permission.canceledPlan"),
@@ -261,8 +272,14 @@ function PlanCardContent({
       </Pressable>
       {expanded ? (
         <View style={styles.body}>
-          {description ? <Text style={styles.description}>{description}</Text> : null}
-          <MarkdownRenderer text={text} rules={markdownRules} markdownit={planMarkdownParser} />
+          {resolvedDescription ? (
+            <Text style={styles.description}>{resolvedDescription}</Text>
+          ) : null}
+          <MarkdownRenderer
+            text={resolvedText}
+            rules={markdownRules}
+            markdownit={planMarkdownParser}
+          />
         </View>
       ) : null}
       {footer ? <View style={styles.footer}>{footer}</View> : null}
