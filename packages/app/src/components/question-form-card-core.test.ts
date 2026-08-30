@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 import {
   areQuestionsAnswered,
   buildQuestionFormAnswers,
+  buildQuestionFormAnswersForAgent,
   parseQuestionFormQuestions,
+  projectQuestionFormTranslations,
   questionShowsTextInput,
   resolveDismissLabel,
   shouldSubmitEmptyOnDismiss,
@@ -98,5 +100,48 @@ describe("question form card core", () => {
     expect(buildQuestionFormAnswers(questions, {}, { 0: "custom" })).toEqual({
       Response: "custom",
     });
+  });
+
+  test("projects question copy into the reader language without changing option identity", () => {
+    const questions = parseQuestionFormQuestions({
+      questions: [
+        {
+          question: "Choose a path",
+          header: "Path",
+          options: [{ label: "Fast", description: "Ship now" }],
+          allowOther: true,
+          placeholder: "Type another path",
+          dismissLabel: "Skip this",
+        },
+      ],
+    });
+    if (!questions) throw new Error("questions did not parse");
+    const translated = projectQuestionFormTranslations(questions, (text) => `译:${text}`);
+    expect(translated[0]).toMatchObject({
+      question: "译:Choose a path",
+      header: "译:Path",
+      placeholder: "译:Type another path",
+      dismissLabel: "译:Skip this",
+      options: [{ label: "译:Fast", description: "译:Ship now" }],
+    });
+  });
+
+  test("translates free-text answers back to the agent language but preserves selected values", async () => {
+    const questions = parseQuestionFormQuestions({
+      questions: [
+        { question: "Pick", header: "Choice", options: [{ label: "Original option" }] },
+        { question: "Explain", header: "Reason", options: [], allowEmpty: false },
+      ],
+    });
+    if (!questions) throw new Error("questions did not parse");
+    const translate = async (text: string) => `agent:${text}`;
+    await expect(
+      buildQuestionFormAnswersForAgent(
+        questions,
+        { 0: new Set([0]) },
+        { 1: "用户输入" },
+        translate,
+      ),
+    ).resolves.toEqual({ Choice: "Original option", Reason: "agent:用户输入" });
   });
 });
