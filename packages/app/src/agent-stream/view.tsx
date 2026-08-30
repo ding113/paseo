@@ -109,6 +109,9 @@ import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useStreamHistoryWindow } from "./use-stream-history-window";
 import { PluginTimelineItemView, useInstalledTimelineTransform } from "@/plugins/timeline";
 import { projectPluginTimelineItems } from "@/plugins/timeline/projection";
+import { isTranslationConfigured } from "@/translation/client";
+import { requestTranslation, translationEntryKey, useTranslationStore } from "@/translation/store";
+import { projectTranslationTimeline } from "./translation-projection";
 
 function renderLiveAuxiliaryNode(input: {
   pendingPermissions: ReactNode;
@@ -352,6 +355,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const autoExpandReasoning = useSettings((settings) => settings.autoExpandReasoning);
     const toolCallDetailLevel = useSettings((settings) => settings.toolCallDetailLevel);
     const chatOutlineEnabled = useSettings((settings) => settings.chatOutlineEnabled);
+    const translationConfig = useSettings((settings) => settings.translation);
+    const translationEnabled = isTranslationConfigured(translationConfig);
+    const translationStatuses = useTranslationStore((state) => state.status);
     const viewportRef = useRef<StreamViewportHandle | null>(null);
     const pendingClientMessageIds = useMemo(
       () => new Set(pendingMessageSubmissions.map((submission) => submission.clientMessageId)),
@@ -576,6 +582,51 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       items: projectedPlugins.tail,
       loadRemoteOlder,
     });
+    const windowedTail = useMemo(
+      () => projectedPlugins.tail.slice(historyWindowStart),
+      [historyWindowStart, projectedPlugins.tail],
+    );
+    useEffect(() => {
+      if (!translationEnabled || !isActive) return;
+      const settledItems = isTurnActive
+        ? windowedTail
+        : [...windowedTail, ...projectedPlugins.head];
+      for (const item of settledItems) {
+        if (item.kind === "assistant_message") {
+          requestTranslation(item.text, translationConfig.myLanguage, "agent-output");
+        }
+      }
+    }, [
+      isActive,
+      isTurnActive,
+      projectedPlugins.head,
+      translationConfig.myLanguage,
+      translationEnabled,
+      windowedTail,
+    ]);
+    const translatedTimeline = useMemo(
+      () =>
+        projectTranslationTimeline({
+          enabled: translationEnabled,
+          isTurnActive,
+          activeTurnId: effectiveTurnPresentation.turnId,
+          tail: windowedTail,
+          head: projectedPlugins.head,
+          statusFor: (text) =>
+            translationStatuses[
+              translationEntryKey("agent-output", translationConfig.myLanguage, text)
+            ],
+        }),
+      [
+        isTurnActive,
+        effectiveTurnPresentation.turnId,
+        projectedPlugins.head,
+        translationConfig.myLanguage,
+        translationEnabled,
+        translationStatuses,
+        windowedTail,
+      ],
+    );
     const isLoadingOlder = remoteIsLoadingOlder;
     const hasOlder = hasLocalHistory || remoteHasOlder;
     const progressKey = `${remoteProgressKey ?? "local"}:${historyWindowStart}`;
@@ -584,19 +635,18 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       return buildAgentStreamRenderModel({
         isTurnActive,
         activeTurnStartedAt: effectiveTurnPresentation.startedAt,
-        tail: projectedPlugins.tail,
-        head: projectedPlugins.head,
+        tail: translatedTimeline.tail,
+        head: translatedTimeline.head,
         platform: isWeb ? "web" : "native",
         isMobileBreakpoint: isMobile,
-        historyStart: historyWindowStart,
+        historyStart: 0,
       });
     }, [
       isMobile,
       isTurnActive,
-      projectedPlugins.head,
-      projectedPlugins.tail,
+      translatedTimeline.head,
+      translatedTimeline.tail,
       effectiveTurnPresentation.startedAt,
-      historyWindowStart,
     ]);
     const streamLayout = useMemo(
       () =>

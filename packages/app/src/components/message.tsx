@@ -57,6 +57,7 @@ import Animated, {
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from "react-native-svg";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { MarkdownRenderer, type MarkdownStyles } from "@/components/markdown/renderer";
+import { StreamingMarkdownBlock } from "@/components/streaming-markdown-block";
 import type { TaskActivity, TodoEntry, UserMessageImageAttachment } from "@/types/stream";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
@@ -71,7 +72,8 @@ import type { MarkdownPhase } from "@/components/markdown/fence/types";
 import { splitMarkdownBlocks } from "@/utils/split-markdown-blocks";
 import {
   useOriginalUserText,
-  useTranslatedAgentOutputForReader,
+  useWireUserText,
+  useAgentOutputTranslationState,
 } from "@/translation/use-translation";
 import { hasTranslatedOriginal, resolveUserMessageText } from "./user-message-translation";
 import { useRevealedText } from "@/hooks/use-revealed-text";
@@ -514,14 +516,17 @@ export const UserMessage = memo(function UserMessage({
   // The timeline stores the text the agent received. Keep the user's original locally and
   // let the translated wire text be the default history view, with an explicit original toggle.
   const originalMessage = useOriginalUserText(clientMessageId);
-  const hasOriginal = hasTranslatedOriginal(message, originalMessage);
+  const wireMessage = useWireUserText(clientMessageId);
+  const presentedMessage = wireMessage ?? message;
+  const hasOriginal = hasTranslatedOriginal(presentedMessage, originalMessage);
   const [isOriginalVisible, setIsOriginalVisible] = useState(false);
   const displayMessage = resolveUserMessageText({
     message,
+    wireMessage,
     originalMessage,
     showOriginal: isOriginalVisible,
   });
-  const hasText = message.trim().length > 0;
+  const hasText = displayMessage.trim().length > 0;
   const hasImages = images.length > 0;
   const hasAttachments = attachments.length > 0;
   const showTrailingRow = !isPending && hasText && (isCompact || isNative || isHovered);
@@ -842,6 +847,10 @@ interface AssistantMessageProps {
 export const assistantMessageStylesheet = StyleSheet.create((theme) => ({
   container: {
     paddingVertical: theme.spacing[3],
+    color: theme.colors.foreground,
+    fontFamily: theme.fontFamily.ui,
+    fontSize: theme.fontSize.content,
+    lineHeight: theme.fontSize.content * 1.5,
     ...(isWeb ? { userSelect: "text" as const } : {}),
   },
   originalToggle: {
@@ -1602,23 +1611,31 @@ export const AssistantMessage = memo(function AssistantMessage({
     () => createAssistantMarkdownParser({ streaming: true }),
     [],
   );
-  const renderedMessage = useMemo(() => capAssistantMessageForRender(message), [message]);
-  const fullMessageByteLength = useMemo(
-    () => (renderedMessage.capped && phase === "complete" ? getUtf8ByteLength(message) : null),
-    [message, phase, renderedMessage.capped],
-  );
-  // Only settled blocks are translated. While the turn streams, `message` is a growing
-  // prefix, so translating it would re-request on every coalescing flush and show text
-  // that keeps being rewritten. The capped text is translated, never the full message.
-  const translated = useTranslatedAgentOutputForReader(
-    phase === "complete" ? renderedMessage.text : null,
-  );
+  const translation = useAgentOutputTranslationState(message);
   const [isOriginalVisible, setIsOriginalVisible] = useState(false);
   const handleToggleOriginal = useCallback(() => setIsOriginalVisible((v) => !v), []);
-  const displayedMessage = translated ?? renderedMessage.text;
+  const translated = translation.text;
+  let displayedMessage = message;
+  if (translation.enabled && translation.status !== "failed") {
+    displayedMessage = translated ?? "";
+  }
+  const renderedMessage = useMemo(
+    () => capAssistantMessageForRender(displayedMessage),
+    [displayedMessage],
+  );
+  const fullMessageByteLength = useMemo(
+    () =>
+      renderedMessage.capped && phase === "complete" ? getUtf8ByteLength(displayedMessage) : null,
+    [displayedMessage, phase, renderedMessage.capped],
+  );
   // Paint a paced prefix while the turn is streaming so text arrives at a steady
   // rate instead of in whatever lumps the daemon's coalescing window produced.
-  const revealedMessage = useRevealedText(displayedMessage, phase);
+  const pacedMessage = useRevealedText(
+    renderedMessage.text,
+    translation.status === "streaming" ? "streaming" : phase,
+  );
+  const revealedMessage = translation.enabled ? renderedMessage.text : pacedMessage;
+  const isStreamingText = translation.status === "streaming" || phase === "streaming";
 
   const fileLinkActions = useAssistantFileLinkActions();
   const handleMarkdownLinkPress = useStableEvent((url: string) => {
@@ -2089,16 +2106,22 @@ export const AssistantMessage = memo(function AssistantMessage({
           block={block}
           marginBottom={index < keyedBlocks.length - 1 ? 12 : 0}
         >
-          <MemoizedMarkdownBlock
+          <StreamingMarkdownBlock
             text={block}
-            rules={markdownRules}
-            parser={
-              phase === "streaming" && index === keyedBlocks.length - 1
-                ? streamingMarkdownParser
-                : markdownParser
-            }
+            streaming={isStreamingText}
             onLinkPress={handleMarkdownLinkPress}
-          />
+          >
+            <MemoizedMarkdownBlock
+              text={block}
+              rules={markdownRules}
+              parser={
+                isStreamingText && index === keyedBlocks.length - 1
+                  ? streamingMarkdownParser
+                  : markdownParser
+              }
+              onLinkPress={handleMarkdownLinkPress}
+            />
+          </StreamingMarkdownBlock>
         </AssistantMessageBlockContainer>
       ))}
       {fullMessageByteLength !== null ? (
@@ -2123,7 +2146,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           {isOriginalVisible ? (
             <View style={assistantMessageStylesheet.originalBody}>
               <MemoizedMarkdownBlock
-                text={renderedMessage.text}
+                text={capAssistantMessageForRender(message).text}
                 rules={markdownRules}
                 parser={markdownParser}
                 onLinkPress={handleMarkdownLinkPress}
