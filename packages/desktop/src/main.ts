@@ -1054,10 +1054,13 @@ const quitLifecycle = createQuitLifecycle({
 });
 
 // electron-updater forwards this event through Electron's built-in autoUpdater.
-electronAutoUpdater.on("before-quit-for-update", () => {
-  log.info("[auto-updater] before-quit-for-update", { currentVersion: app.getVersion() });
-  quitLifecycle.handleBeforeQuitForUpdate();
-});
+// The MAS build receives updates from the App Store instead.
+if (!process.mas) {
+  electronAutoUpdater.on("before-quit-for-update", () => {
+    log.info("[auto-updater] before-quit-for-update", { currentVersion: app.getVersion() });
+    quitLifecycle.handleBeforeQuitForUpdate();
+  });
+}
 app.on("before-quit", quitLifecycle.handleBeforeQuit);
 registerExternalQuitSignals({ signals: process, quit: () => app.quit() });
 

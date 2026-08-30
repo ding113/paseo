@@ -54,7 +54,14 @@ test-results/
 
 # Misc
 *.pem
+*.p12
+*.provisionprofile
 .vercel
+
+# electron-builder keeps tracked entitlement plists beside temporary profiles.
+!packages/desktop/build/
+!packages/desktop/build/*.plist
+packages/desktop/build/*.provisionprofile
 
 # Local Claude configuration
 CLAUDE.local.md

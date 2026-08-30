@@ -1,0 +1,353 @@
+name: macOS TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Marketing version, for example 1.0.0"
+        required: true
+        type: string
+      publish:
+        description: "Upload and distribute the build to TestFlight"
+        required: true
+        default: false
+        type: boolean
+      what_to_test:
+        description: "Optional TestFlight What to Test notes"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: macos-testflight
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    name: Build Apple Silicon Mac App Store package
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      ASC_KEY_TYPE: team
+      ASC_KEY_ID: ${{ vars.APPSTORE_API_KEY_ID }}
+      ASC_ISSUER_ID: ${{ vars.APPSTORE_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+      ASC_APP_ID: ${{ vars.APPSTORE_APP_ID }}
+      ASC_STRICT_AUTH: "true"
+      ASC_DEFAULT_OUTPUT: json
+      ASC_TELEMETRY_DISABLED: "1"
+
+      APP_BUNDLE_ID: ${{ vars.APP_BUNDLE_ID }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      MAC_APP_STORE_PROFILE_ID: ${{ vars.MAC_APP_STORE_PROFILE_ID }}
+      TESTFLIGHT_GROUP: ${{ vars.TESTFLIGHT_GROUP }}
+      VERSION: ${{ inputs.version }}
+      WHAT_TO_TEST: ${{ inputs.what_to_test }}
+      DESKTOP_PACKAGE_PATH: packages/desktop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${ASC_KEY_ID:?APPSTORE_API_KEY_ID is required}"
+          : "${ASC_ISSUER_ID:?APPSTORE_ISSUER_ID is required}"
+          : "${ASC_PRIVATE_KEY:?APPSTORE_API_PRIVATE_KEY is required}"
+          : "${ASC_APP_ID:?APPSTORE_APP_ID is required}"
+          : "${APP_BUNDLE_ID:?APP_BUNDLE_ID is required}"
+          : "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required}"
+          : "${MAC_APP_STORE_PROFILE_ID:?MAC_APP_STORE_PROFILE_ID is required}"
+          : "${TESTFLIGHT_GROUP:?TESTFLIGHT_GROUP is required}"
+          : "${VERSION:?version input is required}"
+
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
+
+          if [[ "$APP_BUNDLE_ID" != "io.github.ding113.paseo" ]]; then
+            echo "Unexpected Bundle ID: $APP_BUNDLE_ID"
+            exit 1
+          fi
+
+          if [[ "$APPLE_TEAM_ID" != "BHQTZC28AQ" ]]; then
+            echo "Unexpected Apple Team ID: $APPLE_TEAM_ID"
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+          registry-url: https://npm.pkg.github.com
+          scope: "@boudra"
+
+      - name: Install JS dependencies
+        run: node scripts/npm-retry.mjs ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup ASC
+        uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
+        with:
+          version: "4.11.0"
+
+      - name: Show toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          node --version
+          asc version
+          uname -m
+          [[ "$(uname -m)" == "arm64" ]]
+
+      - name: Validate App Store Connect authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          asc auth status --validate
+
+          app_json="$(asc apps view --id "$ASC_APP_ID" --output json)"
+          actual_bundle_id="$(printf '%s' "$app_json" | jq -r '.data.attributes.bundleId')"
+          if [[ "$actual_bundle_id" != "$APP_BUNDLE_ID" ]]; then
+            echo "App Store Connect Bundle ID mismatch: $actual_bundle_id"
+            exit 1
+          fi
+
+          asc testflight groups list \
+            --app "$ASC_APP_ID" \
+            --internal \
+            --output table
+
+      - name: Import signing certificates
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466
+        with:
+          p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+
+      - name: Verify signing identities
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          identities="$(security find-identity -v -p basic)"
+          printf '%s\n' "$identities"
+          grep -q 'Apple Distribution:' <<<"$identities"
+          grep -q '3rd Party Mac Developer Installer:' <<<"$identities"
+
+      - name: Download and validate Mac App Store profile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          profile_path="$GITHUB_WORKSPACE/$DESKTOP_PACKAGE_PATH/build/Paseo_AppStore.provisionprofile"
+          profile_plist="$RUNNER_TEMP/profile.plist"
+
+          asc profiles download \
+            --id "$MAC_APP_STORE_PROFILE_ID" \
+            --output "$profile_path"
+
+          asc profiles inspect \
+            --path "$profile_path" \
+            --output json
+
+          security cms -D -i "$profile_path" > "$profile_plist"
+          profile_app_id="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :Entitlements:com.apple.application-identifier' \
+              "$profile_plist"
+          )"
+
+          if [[ "$profile_app_id" != "$APPLE_TEAM_ID.$APP_BUNDLE_ID" ]]; then
+            echo "Provisioning profile App ID mismatch: $profile_app_id"
+            exit 1
+          fi
+
+      - name: Resolve next macOS build number
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          result="$(
+            asc builds next-build-number \
+              --app "$ASC_APP_ID" \
+              --platform MAC_OS \
+              --initial-build-number 1 \
+              --output json
+          )"
+
+          build_number="$(printf '%s' "$result" | jq -r '.nextBuildNumber')"
+          if ! [[ "$build_number" =~ ^[0-9]+$ ]]; then
+            echo "Invalid build number: $build_number"
+            exit 1
+          fi
+
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "Resolved macOS build number: $build_number"
+
+      - name: Set desktop package version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const packagePath = path.join(process.env.DESKTOP_PACKAGE_PATH, "package.json");
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+          packageJson.version = process.env.VERSION;
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+
+      - name: Build Apple Silicon Mac App Store package
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ steps.build.outputs.build_number }}
+        run: |
+          set -euo pipefail
+
+          build_args=(-- --publish never --mac mas --arm64)
+          build_args+=("-c.appId=$APP_BUNDLE_ID")
+          build_args+=("-c.buildVersion=$BUILD_NUMBER")
+          npm run build:desktop "${build_args[@]}"
+
+      - name: Validate signed package
+        id: package
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ steps.build.outputs.build_number }}
+        run: |
+          set -euo pipefail
+
+          release_dir="$DESKTOP_PACKAGE_PATH/release"
+          packages=()
+          while IFS= read -r -d '' file; do
+            packages+=("$file")
+          done < <(find "$release_dir" -maxdepth 2 -type f -name '*.pkg' -print0)
+
+          apps=()
+          while IFS= read -r -d '' file; do
+            apps+=("$file")
+          done < <(find "$release_dir" -maxdepth 2 -type d -name 'Paseo.app' -print0)
+
+          if [[ "${#packages[@]}" -ne 1 ]]; then
+            echo "Expected exactly one PKG, found ${#packages[@]}"
+            find "$release_dir" -maxdepth 2 -print
+            exit 1
+          fi
+
+          if [[ "${#apps[@]}" -ne 1 ]]; then
+            echo "Expected exactly one app bundle, found ${#apps[@]}"
+            find "$release_dir" -maxdepth 2 -print
+            exit 1
+          fi
+
+          pkg_path="${packages[0]}"
+          app_path="${apps[0]}"
+          info_plist="$app_path/Contents/Info.plist"
+
+          actual_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")"
+          actual_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"
+          actual_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")"
+          actual_team_id="$(/usr/libexec/PlistBuddy -c 'Print :ElectronTeamID' "$info_plist")"
+
+          [[ "$actual_bundle_id" == "$APP_BUNDLE_ID" ]]
+          [[ "$actual_version" == "$VERSION" ]]
+          [[ "$actual_build" == "$BUILD_NUMBER" ]]
+          [[ "$actual_team_id" == "$APPLE_TEAM_ID" ]]
+
+          archs="$(lipo -archs "$app_path/Contents/MacOS/Paseo")"
+          grep -qw arm64 <<<"$archs"
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          codesign -d --entitlements :- "$app_path" > "$RUNNER_TEMP/app-entitlements.plist"
+          sandbox_enabled="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :com.apple.security.app-sandbox' \
+              "$RUNNER_TEMP/app-entitlements.plist"
+          )"
+          [[ "$sandbox_enabled" == "true" ]]
+
+          test -f "$app_path/Contents/embedded.provisionprofile"
+          pkgutil --check-signature "$pkg_path"
+
+          echo "pkg_path=$pkg_path" >> "$GITHUB_OUTPUT"
+          echo "Built $pkg_path"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: paseo-macos-testflight-${{ steps.build.outputs.build_number }}
+          path: ${{ steps.package.outputs.pkg_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload to App Store Connect
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ steps.build.outputs.build_number }}
+          PKG_PATH: ${{ steps.package.outputs.pkg_path }}
+        run: |
+          set -euo pipefail
+
+          upload_args=(
+            --app "$ASC_APP_ID"
+            --pkg "$PKG_PATH"
+            --version "$VERSION"
+            --build-number "$BUILD_NUMBER"
+            --wait
+            --poll-interval 15s
+            --output json
+          )
+
+          if [[ -n "${WHAT_TO_TEST:-}" ]]; then
+            upload_args+=(--test-notes "$WHAT_TO_TEST" --locale en-US)
+          fi
+
+          asc builds upload "${upload_args[@]}"
+
+      - name: Distribute build to internal TestFlight group
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ steps.build.outputs.build_number }}
+        run: |
+          set -euo pipefail
+
+          asc builds add-groups \
+            --app "$ASC_APP_ID" \
+            --version "$VERSION" \
+            --build-number "$BUILD_NUMBER" \
+            --platform MAC_OS \
+            --group "$TESTFLIGHT_GROUP" \
+            --output json
+
+      - name: Verify uploaded build
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ steps.build.outputs.build_number }}
+        run: |
+          set -euo pipefail
+
+          asc builds list \
+            --app "$ASC_APP_ID" \
+            --version "$VERSION" \
+            --build-number "$BUILD_NUMBER" \
+            --platform MAC_OS \
+            --output table
