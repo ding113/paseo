@@ -131,6 +131,61 @@ export function buildQuestionFormAnswers(
   return answers;
 }
 
+export function projectQuestionFormTranslations(
+  questions: QuestionFormQuestion[],
+  translate: (text: string) => string,
+): QuestionFormQuestion[] {
+  const translated = (text: string | undefined): string | undefined =>
+    text === undefined || text.length === 0 ? text : translate(text);
+  return questions.map((question) => ({
+    ...question,
+    question: translated(question.question) ?? question.question,
+    header: translated(question.header) ?? question.header,
+    placeholder: translated(question.placeholder),
+    dismissLabel: translated(question.dismissLabel),
+    options: question.options.map((option) => ({
+      ...option,
+      label: translated(option.label) ?? option.label,
+      description: translated(option.description),
+    })),
+  }));
+}
+
+export function listQuestionFormTranslatableTexts(questions: QuestionFormQuestion[]): string[] {
+  const texts = new Set<string>();
+  const add = (text: string | undefined) => {
+    if (text?.trim()) texts.add(text);
+  };
+  for (const question of questions) {
+    add(question.question);
+    add(question.header);
+    add(question.placeholder);
+    add(question.dismissLabel);
+    for (const option of question.options) {
+      add(option.label);
+      add(option.description);
+    }
+  }
+  return [...texts];
+}
+
+export async function buildQuestionFormAnswersForAgent(
+  questions: QuestionFormQuestion[],
+  selections: QuestionSelections,
+  otherTexts: QuestionOtherTexts,
+  translate: (text: string) => Promise<string>,
+): Promise<Record<string, string>> {
+  const answers = buildQuestionFormAnswers(questions, selections, otherTexts);
+  await Promise.all(
+    questions.map(async (question, index) => {
+      const otherText = otherTexts[index]?.trim();
+      if (!questionShowsTextInput(question) || !otherText) return;
+      answers[question.header] = await translate(otherText);
+    }),
+  );
+  return answers;
+}
+
 export function shouldSubmitEmptyOnDismiss(questions: QuestionFormQuestion[]): boolean {
   return (
     questions.length > 0 &&
