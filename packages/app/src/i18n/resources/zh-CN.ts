@@ -1882,6 +1882,21 @@ export const zhCN: TranslationResources = {
       title: "翻译",
       enabled: "翻译消息",
       enabledHint: "把 agent 的回复翻译成你的语言，并在发送前把你的输入翻译成 agent 的语言。",
+      provider: {
+        label: "服务类型",
+        hint: "选择翻译请求使用的 API 协议。",
+        options: {
+          "openai-compatible": "OpenAI Compatible",
+          openai: "OpenAI",
+          anthropic: "Anthropic",
+          google: "Google Gemini",
+        },
+      },
+      reasoningEffort: {
+        label: "思考强度",
+        hint: "仅在所选端点支持思考控制时生效。",
+        options: { default: "服务默认", low: "低", medium: "中", high: "高" },
+      },
       myLanguage: {
         label: "你的语言",
         hint: "agent 的回复和名称会翻译成这个语言。",
@@ -1906,6 +1921,13 @@ export const zhCN: TranslationResources = {
         label: "模型",
         hint: "用于翻译的模型。",
         placeholder: "gpt-4o-mini",
+      },
+      test: {
+        title: "连接",
+        hint: "使用当前填写的值发送一条短流式翻译。",
+        action: "测试连接",
+        success: "连接成功。",
+        error: "连接失败：{{message}}",
       },
     },
     title: "设置",

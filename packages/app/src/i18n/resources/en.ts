@@ -1914,6 +1914,21 @@ export const en = {
       enabled: "Translate messages",
       enabledHint:
         "Translate agent replies into your language, and your prompts into the agent's language before sending.",
+      provider: {
+        label: "Provider",
+        hint: "Choose the API protocol used for translation.",
+        options: {
+          "openai-compatible": "OpenAI compatible",
+          openai: "OpenAI",
+          anthropic: "Anthropic",
+          google: "Google Gemini",
+        },
+      },
+      reasoningEffort: {
+        label: "Reasoning effort",
+        hint: "Applied only when the selected endpoint supports reasoning controls.",
+        options: { default: "Provider default", low: "Low", medium: "Medium", high: "High" },
+      },
       myLanguage: {
         label: "Your language",
         hint: "Agent replies and names are translated into this language.",
@@ -1938,6 +1953,13 @@ export const en = {
         label: "Model",
         hint: "The model used for translation.",
         placeholder: "gpt-4o-mini",
+      },
+      test: {
+        title: "Connection",
+        hint: "Send a short streaming translation with the current values.",
+        action: "Test connection",
+        success: "Connection succeeded.",
+        error: "Connection failed: {{message}}",
       },
     },
     title: "Settings",

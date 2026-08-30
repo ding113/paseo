@@ -1913,6 +1913,28 @@ export const ko: TranslationResources = {
       title: "번역",
       enabled: "메시지 번역",
       enabledHint: "에이전트 응답을 내 언어로, 보내기 전에 내 입력을 에이전트 언어로 번역합니다.",
+      provider: {
+        label: "제공자",
+        hint: "번역 API 프로토콜을 선택합니다.",
+        options: {
+          "openai-compatible": "OpenAI Compatible",
+          openai: "OpenAI",
+          anthropic: "Anthropic",
+          google: "Google Gemini",
+        },
+      },
+      reasoningEffort: {
+        label: "추론 강도",
+        hint: "선택한 엔드포인트가 지원할 때만 적용됩니다.",
+        options: { default: "기본값", low: "낮음", medium: "중간", high: "높음" },
+      },
+      test: {
+        title: "연결",
+        hint: "짧은 스트리밍 번역을 전송합니다.",
+        action: "연결 테스트",
+        success: "연결되었습니다.",
+        error: "연결 실패: {{message}}",
+      },
       myLanguage: {
         label: "내 언어",
         hint: "에이전트 응답과 이름이 이 언어로 번역됩니다.",
