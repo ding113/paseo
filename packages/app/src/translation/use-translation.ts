@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useSettings } from "@/hooks/use-settings";
+import { useAppSettings } from "@/hooks/use-settings";
 import {
   isTranslationConfigured,
   type TranslationConfig,
@@ -17,7 +17,7 @@ import {
 export { isCodeBlock } from "./segments";
 
 export function useTranslationConfig(): TranslationConfig {
-  return useSettings((settings) => settings.translation);
+  return useAppSettings().settings.translation;
 }
 
 export function useIsTranslationEnabled(): boolean {
