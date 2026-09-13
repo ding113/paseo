@@ -246,21 +246,6 @@ jobs:
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "Resolved macOS build number: $build_number"
 
-      - name: Set desktop package version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          node <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-
-          const packagePath = path.join(process.env.DESKTOP_PACKAGE_PATH, "package.json");
-          const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-          packageJson.version = process.env.VERSION;
-          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
-          NODE
-
       - name: Build Apple Silicon Mac App Store package
         shell: bash
         env:
@@ -268,9 +253,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Only the bundle's marketing version follows the TestFlight version. package.json keeps
+          # the daemon's version, because the desktop restarts its daemon when the daemon's version
+          # differs from app.getVersion(), which reads package.json.
           build_args=(-- --publish never --mac mas --arm64)
           build_args+=("-c.appId=$APP_BUNDLE_ID")
           build_args+=("-c.buildVersion=$BUILD_NUMBER")
+          build_args+=("-c.mac.bundleShortVersion=$VERSION")
           npm run build:desktop "${build_args[@]}"
 
       - name: Validate signed package
