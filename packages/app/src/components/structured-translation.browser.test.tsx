@@ -15,6 +15,15 @@ import type { PendingPermission } from "@/types/shared";
 import { PlanCard } from "./plan-card";
 import { QuestionFormCard } from "./question-form-card";
 
+// PlanCard renders through the full Markdown renderer, whose code-block and diagram modules need
+// native stubs this harness doesn't have. These tests only need the translated body to reach it.
+vi.mock("@/components/markdown/renderer", async () => {
+  const { createElement } = await import("react");
+  return {
+    MarkdownRenderer: ({ text }: { text: string }) => createElement("span", null, text),
+  };
+});
+
 const translationConfig = {
   ...DEFAULT_TRANSLATION_CONFIG,
   enabled: true,

@@ -153,6 +153,11 @@ export default defineConfig({
         find: /^expo-linking$/,
         replacement: path.resolve(__dirname, "test-stubs/expo-linking.ts"),
       },
+      // expo-modules-core imports TurboModuleRegistry, which react-native-web does not export.
+      {
+        find: /^expo-clipboard$/,
+        replacement: path.resolve(__dirname, "test-stubs/expo-clipboard.ts"),
+      },
       {
         find: /^lucide-react-native$/,
         replacement: path.resolve(__dirname, "test-stubs/lucide-react-native.ts"),
