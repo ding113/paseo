@@ -608,8 +608,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () =>
         projectTranslationTimeline({
           enabled: translationEnabled,
-          isTurnActive,
-          activeTurnId: effectiveTurnPresentation.turnId,
           tail: windowedTail,
           head: projectedPlugins.head,
           statusFor: (text) =>
@@ -618,8 +616,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             ],
         }),
       [
-        isTurnActive,
-        effectiveTurnPresentation.turnId,
         projectedPlugins.head,
         translationConfig.myLanguage,
         translationEnabled,

@@ -5,10 +5,10 @@ import { projectTranslationTimeline } from "./translation-projection";
 
 const at = (second: number) => new Date(2026, 0, 1, 0, 0, second);
 const user = (id: string): StreamItem => ({ kind: "user_message", id, text: id, timestamp: at(1) });
-const assistant = (id: string): StreamItem => ({
+const assistant = (id: string, text = id): StreamItem => ({
   kind: "assistant_message",
   id,
-  text: id,
+  text,
   timestamp: at(2),
 });
 const activity = (id: string): StreamItem => ({
@@ -20,10 +20,9 @@ const activity = (id: string): StreamItem => ({
   timestamp: at(3),
 });
 
-function project(items: StreamItem[], statuses: Record<string, TranslationStatus>, active = false) {
+function project(items: StreamItem[], statuses: Record<string, TranslationStatus>) {
   return projectTranslationTimeline({
     enabled: true,
-    isTurnActive: active,
     tail: items,
     head: [],
     statusFor: (text) => statuses[text],
@@ -31,74 +30,76 @@ function project(items: StreamItem[], statuses: Record<string, TranslationStatus
 }
 
 describe("translation timeline projection", () => {
-  it("hides agent rows until translated assistant text starts", () => {
-    const items = [user("user"), activity("tool-before"), assistant("answer")];
-    expect(project(items, { answer: "pending" })).toEqual(["user"]);
-    expect(project(items, { answer: "streaming" })).toEqual(["user", "tool-before", "answer"]);
-  });
-
-  it("never lets a later assistant overtake an earlier translation barrier", () => {
-    const items = [
-      user("user"),
-      activity("thought"),
-      assistant("first"),
-      activity("tool"),
-      assistant("second"),
-    ];
-    expect(project(items, { first: "pending", second: "complete" })).toEqual(["user"]);
-    expect(project(items, { first: "streaming", second: "complete" })).toEqual([
+  // A turn that works through tools without narrating used to render nothing until it ended,
+  // because every row waited for an assistant translation that did not exist yet.
+  it("renders a turn without assistant text as it arrives", () => {
+    expect(project([user("user"), activity("thought"), activity("tool")], {})).toEqual([
       "user",
       "thought",
+      "tool",
+    ]);
+  });
+
+  it("hides assistant text until its translation starts", () => {
+    const items = [user("user"), activity("tool-before"), assistant("answer")];
+    expect(project(items, {})).toEqual(["user", "tool-before"]);
+    expect(project(items, { answer: "pending" })).toEqual(["user", "tool-before"]);
+    expect(project(items, { answer: "streaming" })).toEqual(["user", "tool-before", "answer"]);
+    expect(project(items, { answer: "failed" })).toEqual(["user", "tool-before", "answer"]);
+  });
+
+  it("keeps rows after an untranslated assistant block live", () => {
+    const items = [user("user"), assistant("first"), activity("tool"), activity("thought")];
+    expect(project(items, { first: "pending" })).toEqual(["user", "tool", "thought"]);
+  });
+
+  it("never lets a later assistant block overtake an earlier untranslated one", () => {
+    const items = [user("user"), assistant("first"), activity("tool"), assistant("second")];
+    expect(project(items, { first: "pending", second: "complete" })).toEqual(["user", "tool"]);
+    expect(project(items, { first: "streaming", second: "complete" })).toEqual([
+      "user",
       "first",
+      "tool",
+      "second",
     ]);
   });
 
   it("preserves order across the tail/head boundary", () => {
-    const tail = [user("user"), activity("thought"), assistant("first")];
-    const head = [activity("tool"), assistant("second")];
     const output = projectTranslationTimeline({
       enabled: true,
-      isTurnActive: false,
+      tail: [user("user"), activity("thought"), assistant("first")],
+      head: [activity("tool"), assistant("second")],
+      statusFor: (text) =>
+        ({ first: "pending", second: "complete" })[text] as TranslationStatus | undefined,
+    });
+    expect(output.tail.map((item) => item.id)).toEqual(["user", "thought"]);
+    expect(output.head.map((item) => item.id)).toEqual(["tool"]);
+  });
+
+  it("does not wait on whitespace, which is never sent for translation", () => {
+    expect(project([assistant("blank", "\n\n"), assistant("next")], { next: "complete" })).toEqual([
+      "blank",
+      "next",
+    ]);
+  });
+
+  it("returns the input lanes when nothing is hidden", () => {
+    const tail = [user("user"), activity("tool")];
+    const head = [assistant("answer")];
+    const output = projectTranslationTimeline({
+      enabled: true,
       tail,
       head,
-      statusFor: (text) =>
-        ({ first: "complete", second: "streaming" })[text] as TranslationStatus | undefined,
+      statusFor: () => "complete",
     });
-    expect([...output.tail, ...output.head].map((item) => item.id)).toEqual([
-      "user",
-      "thought",
-      "first",
-      "tool",
-      "second",
-    ]);
-  });
-
-  it("releases later rows only after the preceding translation completes", () => {
-    const items = [user("user"), assistant("first"), activity("tool"), assistant("second")];
-    expect(project(items, { first: "streaming", second: "pending" })).toEqual(["user", "first"]);
-    expect(project(items, { first: "complete", second: "pending" })).toEqual([
-      "user",
-      "first",
-      "tool",
-    ]);
-    expect(project(items, { first: "complete", second: "failed" })).toEqual([
-      "user",
-      "first",
-      "tool",
-      "second",
-    ]);
-  });
-
-  it("does not permanently hide a completed tool-only turn", () => {
-    expect(project([user("user"), activity("tool")], {})).toEqual(["user", "tool"]);
-    expect(project([user("user"), activity("tool")], {}, true)).toEqual(["user"]);
+    expect(output.tail).toBe(tail);
+    expect(output.head).toBe(head);
   });
 
   it("is identity when translation is disabled", () => {
     const items = [assistant("answer"), activity("tool")];
     const output = projectTranslationTimeline({
       enabled: false,
-      isTurnActive: true,
       tail: items,
       head: [],
       statusFor: () => undefined,
