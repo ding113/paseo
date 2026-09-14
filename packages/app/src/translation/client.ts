@@ -3,7 +3,9 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
+  APICallError,
   extractReasoningMiddleware,
+  RetryError,
   streamText,
   wrapLanguageModel,
   type LanguageModel,
@@ -225,6 +227,38 @@ function withDeadline(signal: AbortSignal | undefined, timeoutMs = REQUEST_TIMEO
   };
 }
 
+/**
+ * A translation request that failed. `retryable` is false when sending the same request again
+ * cannot help: the provider rejected it, the SDK already spent its own retries, or the reply was
+ * unusable.
+ */
+export class TranslationError extends Error {
+  readonly retryable: boolean;
+
+  constructor(message: string, options: { retryable: boolean; cause?: unknown }) {
+    super(message, { cause: options.cause });
+    this.name = "TranslationError";
+    this.retryable = options.retryable;
+  }
+}
+
+function toTranslationError(error: unknown): TranslationError {
+  if (error instanceof TranslationError) return error;
+  const status =
+    APICallError.isInstance(error) && error.statusCode !== undefined ? ` ${error.statusCode}` : "";
+  const message = error instanceof Error ? error.message.trim() : "";
+  return new TranslationError(
+    `Translation request failed${status}${message ? `: ${message}` : ""}`,
+    {
+      // Rate limits and overloads were already retried inside the SDK, and any other API error is a
+      // rejection. What is left — a dropped connection, a stream cut short, a timeout — may succeed
+      // on another attempt.
+      retryable: !APICallError.isInstance(error) && !RetryError.isInstance(error),
+      cause: error,
+    },
+  );
+}
+
 export async function streamTranslation(input: {
   text: string;
   targetLanguage: string;
@@ -239,14 +273,16 @@ export async function streamTranslation(input: {
     throw new Error(`Unsupported translation target language: ${input.targetLanguage}`);
   }
   const deadline = withDeadline(input.signal, input.timeoutMs);
+  let streamError: unknown;
   try {
-    let streamError: unknown;
     const result = streamText({
       model: createTranslationModel(input.config),
       prompt: buildPrompt(language, input.text, input.promptKind ?? "default"),
       temperature: 0.7,
       topP: 1,
-      maxRetries: 0,
+      // The SDK retries rate limits and overloads before the stream opens, backing off
+      // exponentially and honouring Retry-After.
+      maxRetries: 2,
       abortSignal: deadline.signal,
       providerOptions: providerOptions(input.config),
       onError: ({ error }) => {
@@ -258,44 +294,23 @@ export async function streamTranslation(input: {
       translated += delta;
       input.onText?.(translated);
     }
-    if (streamError) {
-      const failure = streamError as { statusCode?: unknown; message?: unknown };
-      const status = typeof failure.statusCode === "number" ? ` ${failure.statusCode}` : "";
-      const message = typeof failure.message === "string" ? failure.message.trim() : "";
-      throw new Error(`Translation request failed${status}${message ? `: ${message}` : ""}`);
-    }
+    if (streamError) throw streamError;
     if ((await result.finishReason) === "length") {
-      throw new Error("Translation response was truncated at the model's output limit");
+      throw new TranslationError("Translation response was truncated at the model's output limit", {
+        retryable: false,
+      });
     }
     const trimmed = translated.trim();
-    if (trimmed.length === 0) throw new Error("Translation response was empty");
+    if (trimmed.length === 0) {
+      throw new TranslationError("Translation response was empty", { retryable: false });
+    }
     if (trimmed !== translated) input.onText?.(trimmed);
     return trimmed;
+  } catch (error) {
+    throw toTranslationError(streamError ?? error);
   } finally {
     deadline.dispose();
   }
-}
-
-export async function translateSegments(input: {
-  segments: string[];
-  targetLanguage: string;
-  config: TranslationConfig;
-  promptKind?: TranslationPromptKind;
-  signal?: AbortSignal;
-  onText?: (segmentIndex: number, text: string) => void;
-}): Promise<string[]> {
-  return Promise.all(
-    input.segments.map((text, index) =>
-      streamTranslation({
-        text,
-        targetLanguage: input.targetLanguage,
-        config: input.config,
-        promptKind: input.promptKind,
-        signal: input.signal,
-        onText: input.onText ? (value) => input.onText?.(index, value) : undefined,
-      }),
-    ),
-  );
 }
 
 export async function testTranslationConnection(config: TranslationConfig): Promise<void> {

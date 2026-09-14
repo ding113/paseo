@@ -3,7 +3,8 @@ import { translationCache } from "./cache";
 import {
   DEFAULT_TRANSLATION_CONFIG,
   isTranslationConfigured,
-  translateSegments,
+  streamTranslation,
+  TranslationError,
   type TranslationPromptKind,
   type TranslationConfig,
 } from "./client";
@@ -17,6 +18,11 @@ import { joinParts, splitTranslatableParts, type TextPart } from "./segments";
 const BATCH_WINDOW_MS = 300;
 /** Concurrent requests per flush. Each segment is its own request; this caps the fan-out. */
 const MAX_BATCH_SEGMENTS = 20;
+/**
+ * Backoff before each retry of a request the client marked retryable: a dropped connection, a
+ * stream cut short, a timeout. The SDK has already retried rate limits by the time one fails.
+ */
+const RETRY_DELAYS_MS = [1_000, 3_000];
 
 export function translationEntryKey(
   promptKind: TranslationPromptKind,
@@ -59,6 +65,17 @@ interface QueuedJob {
 
 let config: TranslationConfig = DEFAULT_TRANSLATION_CONFIG;
 let queue = new Map<string, QueuedJob>();
+/**
+ * Keys whose translation is running. With the queue, this keeps each text single-flight: views
+ * ask again on every stream flush, and text still waiting for its first token must not go out
+ * twice, or a late copy flips a finished translation back to streaming.
+ */
+let inFlight = new Set<string>();
+/**
+ * Paragraph requests in flight. Two messages can share a paragraph — a promoted live block and the
+ * merged message a catch-up installs later — so each request is single-flight too.
+ */
+let segmentFlights = new Map<string, Promise<string>>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let configGeneration = 0;
 const activeControllers = new Set<AbortController>();
@@ -90,6 +107,8 @@ export function setTranslationConfig(next: TranslationConfig): void {
     for (const controller of activeControllers) controller.abort(new Error("Config changed"));
     activeControllers.clear();
     queue = new Map();
+    inFlight = new Set();
+    segmentFlights = new Map();
     if (flushTimer !== null) clearTimeout(flushTimer);
     flushTimer = null;
     const { entries, status } = useTranslationStore.getState();
@@ -165,12 +184,21 @@ function joinAvailablePrefix(parts: readonly TextPart[]): string {
   return joinParts(visible);
 }
 
+interface RunningJob {
+  job: QueuedJob;
+  /** Translated so far, in source order; prose parts start empty and fill as they stream. */
+  parts: TextPart[];
+  remaining: number;
+  failed: boolean;
+}
+
 /**
- * Translate a set of jobs for one language in as few requests as possible.
+ * Translate a set of jobs for one language and prompt.
  *
- * Each job expands into its prose blocks; code blocks never leave the client. The
- * expanded segments from every job are flattened into shared requests and then folded
- * back into per-job messages by walking the parts in order.
+ * Each job expands into its prose blocks; code blocks never leave the client. Every block is its
+ * own request, sent in waves of `MAX_BATCH_SEGMENTS`. A job commits as soon as its own blocks
+ * finish, and a block that still fails after the client's retries fails only its own job: the
+ * rest of the wave keeps streaming.
  */
 async function runJobs(
   targetLanguage: string,
@@ -179,83 +207,106 @@ async function runJobs(
 ): Promise<void> {
   const generation = configGeneration;
   const requestConfig = config;
+  const flight = inFlight;
   const controller = new AbortController();
-  let stopped = false;
   activeControllers.add(controller);
-  const expanded = jobs.map((job) => ({ job, parts: splitTranslatableParts(job.text) }));
+  for (const job of jobs) flight.add(job.key);
+  const isCurrent = () => generation === configGeneration;
 
-  const pending: Array<{ jobIndex: number; partIndex: number; text: string }> = [];
-  expanded.forEach((entry, jobIndex) => {
-    entry.parts.forEach((part, partIndex) => {
-      if (part.translate && part.text.trim().length > 0) {
-        pending.push({ jobIndex, partIndex, text: part.text });
+  const requests: Array<{ running: RunningJob; part: TextPart; text: string }> = [];
+  for (const job of jobs) {
+    const source = splitTranslatableParts(job.text);
+    const running: RunningJob = { job, parts: [], remaining: 0, failed: false };
+    for (const sourcePart of source) {
+      const translatable = sourcePart.translate && sourcePart.text.trim().length > 0;
+      const part = { ...sourcePart, text: sourcePart.translate ? "" : sourcePart.text };
+      running.parts.push(part);
+      if (translatable) {
+        running.remaining += 1;
+        requests.push({ running, part, text: sourcePart.text });
       }
-    });
-  });
-
-  if (pending.length === 0) {
-    // Nothing translatable — the message is pure code. Record it as its own translation so
-    // it is not re-queued on every render.
-    commitEntries(Object.fromEntries(jobs.map((job) => [job.key, job.text])));
-    activeControllers.delete(controller);
-    return;
-  }
-
-  const results: Array<TextPart[]> = expanded.map((entry) =>
-    entry.parts.map((part) => ({ ...part, text: part.translate ? "" : part.text })),
-  );
-
-  for (let offset = 0; offset < pending.length; offset += MAX_BATCH_SEGMENTS) {
-    const chunk = pending.slice(offset, offset + MAX_BATCH_SEGMENTS);
-    try {
-      const translated = await translateSegments({
-        segments: chunk.map((item) => item.text),
-        targetLanguage,
-        config: requestConfig,
-        promptKind,
-        signal: controller.signal,
-        onText: (segmentIndex, value) => {
-          if (stopped || generation !== configGeneration) return;
-          const item = chunk[segmentIndex];
-          if (!item) return;
-          const part = results[item.jobIndex]?.[item.partIndex];
-          if (!part) return;
-          part.text = value;
-          const job = expanded[item.jobIndex]?.job;
-          const parts = results[item.jobIndex];
-          if (job && parts) commitStreaming({ [job.key]: joinAvailablePrefix(parts) });
-        },
-      });
-      chunk.forEach((item, index) => {
-        const value = translated[index];
-        if (value === undefined) return;
-        const part = results[item.jobIndex]?.[item.partIndex];
-        if (part) part.text = value;
-      });
-    } catch (error) {
-      stopped = true;
-      controller.abort(error);
-      if (generation === configGeneration) {
-        console.warn("[translation] Batch failed", error);
-        markFailed(jobs.map((job) => job.key));
-      }
-      activeControllers.delete(controller);
-      return;
+    }
+    if (running.remaining === 0) {
+      // Nothing translatable — the message is pure code. Record it as its own translation so
+      // it is not re-queued on every render.
+      flight.delete(job.key);
+      commitEntries({ [job.key]: job.text });
     }
   }
 
-  activeControllers.delete(controller);
-  if (generation !== configGeneration) return;
+  const segments = segmentFlights;
+  // A paragraph already translated or in flight is reused; only the message that sent the
+  // request streams it.
+  const translateSegment = (text: string, onText: (value: string) => void): Promise<string> => {
+    const cached = translationCache.get(targetLanguage, text, promptKind);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const key = translationEntryKey(promptKind, targetLanguage, text);
+    const existing = segments.get(key);
+    if (existing) return existing;
+    const attempt = async (retry: number): Promise<string> => {
+      try {
+        return await streamTranslation({
+          text,
+          targetLanguage,
+          config: requestConfig,
+          promptKind,
+          signal: controller.signal,
+          onText,
+        });
+      } catch (error) {
+        const delay = RETRY_DELAYS_MS[retry];
+        const retryable = error instanceof TranslationError && error.retryable;
+        if (delay === undefined || !retryable || !isCurrent()) throw error;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (!isCurrent()) throw error;
+        return attempt(retry + 1);
+      }
+    };
+    const request = attempt(0)
+      .then((value) => {
+        if (isCurrent()) translationCache.set(targetLanguage, text, value, promptKind);
+        return value;
+      })
+      .finally(() => {
+        if (segments.get(key) === request) segments.delete(key);
+      });
+    segments.set(key, request);
+    return request;
+  };
 
-  const entries: Record<string, string> = {};
-  expanded.forEach((entry, jobIndex) => {
-    const parts = results[jobIndex];
-    if (!parts) return;
-    const body = joinParts(parts);
-    entries[entry.job.key] = body;
-    translationCache.set(targetLanguage, entry.job.text, body, promptKind);
-  });
-  commitEntries(entries);
+  const translatePart = async ({ running, part, text }: (typeof requests)[number]) => {
+    if (running.failed) return;
+    const { job } = running;
+    try {
+      part.text = await translateSegment(text, (value) => {
+        if (running.failed || !isCurrent()) return;
+        part.text = value;
+        commitStreaming({ [job.key]: joinAvailablePrefix(running.parts) });
+      });
+    } catch (error) {
+      if (running.failed || !isCurrent()) return;
+      running.failed = true;
+      flight.delete(job.key);
+      console.warn("[translation] Request failed", error);
+      markFailed([job.key]);
+      return;
+    }
+    running.remaining -= 1;
+    if (running.remaining > 0 || running.failed || !isCurrent()) return;
+    flight.delete(job.key);
+    const body = joinParts(running.parts);
+    translationCache.set(targetLanguage, job.text, body, promptKind);
+    commitEntries({ [job.key]: body });
+  };
+
+  try {
+    for (let offset = 0; offset < requests.length && isCurrent(); offset += MAX_BATCH_SEGMENTS) {
+      await Promise.all(requests.slice(offset, offset + MAX_BATCH_SEGMENTS).map(translatePart));
+    }
+  } finally {
+    activeControllers.delete(controller);
+    for (const job of jobs) flight.delete(job.key);
+  }
 }
 
 function flushQueue(): void {
@@ -306,8 +357,7 @@ export function requestTranslation(
     return cached;
   }
 
-  // The queue itself is the de-dupe, so no store write is needed to mark work in flight.
-  if (queue.has(key)) return undefined;
+  if (queue.has(key) || inFlight.has(key)) return undefined;
   queue.set(key, { key, text, targetLanguage, promptKind });
   queueMicrotask(() => {
     if (queue.has(key)) markPending([key]);
@@ -368,13 +418,19 @@ export async function translateNow(
   ) {
     return known;
   }
-  if (current.status[key] === "pending" || current.status[key] === "streaming") {
-    const inFlight = await waitForTranslation(key);
-    if (inFlight !== undefined) return inFlight;
+  if (
+    inFlight.has(key) ||
+    current.status[key] === "pending" ||
+    current.status[key] === "streaming"
+  ) {
+    const joined = await waitForTranslation(key);
+    if (joined !== undefined) return joined;
   }
   const cached = translationCache.get(targetLanguage, text, promptKind);
   if (cached !== undefined) return cached;
 
+  // Take over a job still waiting for the batch window rather than sending it twice.
+  queue.delete(key);
   try {
     await runJobs(targetLanguage, promptKind, [{ key, text, targetLanguage, promptKind }]);
     return useTranslationStore.getState().entries[key] ?? text;
@@ -484,6 +540,8 @@ export function resetTranslationStoreForTest(): void {
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
   queue = new Map();
+  inFlight = new Set();
+  segmentFlights = new Map();
   configGeneration += 1;
   for (const controller of activeControllers) controller.abort(new Error("Test reset"));
   activeControllers.clear();

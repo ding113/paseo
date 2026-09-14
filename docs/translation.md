@@ -52,12 +52,19 @@ one starts rewriting them, that is when a mask/restore pass earns its keep.
 While a turn streams, an assistant message is a growing prefix and `useRevealedText` paces
 a slice of it every frame. Translating that growing prefix would re-request on every
 coalescing flush. Translation begins after an assistant block settles, but its result is
-consumed as a stream. Until the first translated text arrives, the response is hidden. Tool
-calls, thoughts, and later assistant blocks stay behind the same presentation barrier and are
-released in timeline order.
+consumed as a stream. An assistant block stays hidden until its first translated text arrives,
+and later assistant blocks wait behind it so the prose keeps its order.
+
+Only assistant text waits. Tool calls, thoughts, and every other row render as they arrive.
+They used to wait behind the same barrier, which left a turn that works through tools without
+narrating blank until it ended, and let one slow translation stall the whole stream.
 
 Requests are collected for 300ms and dispatched together, so a message that arrives as six
-blocks issues its calls in one concurrent burst rather than a trickle.
+blocks issues its calls in one concurrent burst rather than a trickle. Each text goes out once:
+views ask again on every stream flush, so text already queued or in flight joins that work. A
+second request would stream after the first finished and flip a complete translation back to
+streaming. The same holds per paragraph: a live block and the merged message a catch-up installs
+later share their paragraphs, and each paragraph is requested once and then read from the cache.
 
 On Web and Electron, incomplete agent and translation Markdown is rendered by Streamdown.
 Settled blocks return to Paseo's existing renderer so file links, rich copy, images, code, and
@@ -153,6 +160,13 @@ that await.
 A completion that stopped at the provider's output limit (`finish_reason: "length"`) is
 rejected rather than cached. Partial prose looks like a finished translation and would
 silently drop the rest of the message.
+
+Rate limits and overloaded providers are retried by the AI SDK before the stream opens
+(`maxRetries: 2`), backing off exponentially and honouring `Retry-After`. The SDK does not retry
+a browser's bare "Failed to fetch", a stream cut short, or the deadline, so the queue retries
+those twice, after 1s and 3s. A rejection, a truncated or empty reply, and a request the SDK
+already gave up on fail at once. A request that still fails fails only its own message; the
+messages dispatched with it keep streaming and commit on their own.
 
 A failed job stays failed for the session, because retrying on every render turns a bad
 endpoint into an unbounded request loop. Changing the endpoint, key, model, or either

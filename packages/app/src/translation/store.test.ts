@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_TRANSLATION_CONFIG } from "./client";
 import {
+  requestTranslation,
   resetTranslationStoreForTest,
   selectPromptOriginal,
   selectPromptWireText,
+  selectTranslation,
+  selectTranslationStatus,
   setTranslationConfig,
   splitLeadingSlashCommand,
   translateComposerInput,
@@ -47,9 +50,144 @@ function stubFetch(...contents: string[]) {
   );
 }
 
+function sseResponse(content: string): Response {
+  const chunk = (delta: object, finishReason: string | null) =>
+    `data: ${JSON.stringify({
+      id: "translation",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: config.model,
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+    })}\n\n`;
+  return new Response(`${chunk({ content }, null)}${chunk({}, "stop")}data: [DONE]\n\n`, {
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+const BATCH_WINDOW_MS = 300;
+/** Longer than every retry backoff combined. */
+const RETRY_WINDOW_MS = 10_000;
+const statusOf = (text: string) =>
+  selectTranslationStatus(useTranslationStore.getState(), text, "zh", "agent-output");
+const translationOf = (text: string) =>
+  selectTranslation(useTranslationStore.getState(), text, "zh", "agent-output");
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   resetTranslationStoreForTest();
+});
+
+describe("agent output queue", () => {
+  // Regression: every stream flush re-requested text still waiting for its first token, so
+  // one block went out several times and a late copy flipped a finished translation back to
+  // streaming.
+  it("sends text that is re-requested while in flight only once", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setTranslationConfig(config);
+    let respond!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      respond = resolve;
+    });
+    const fetchMock = vi.fn(async () => {
+      await answered;
+      return sseResponse("你好");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    requestTranslation("Hello", "zh", "agent-output");
+    await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    requestTranslation("Hello", "zh", "agent-output");
+    await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS);
+    respond();
+
+    await vi.waitFor(() => expect(statusOf("Hello")).toBe("complete"));
+    expect(translationOf("Hello")).toBe("你好");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("translates a paragraph shared by two messages once", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setTranslationConfig(config);
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      sseResponse(String(init?.body).includes("Shared paragraph") ? "共享" : "其余"),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const merged = "Shared paragraph\n\nAnother paragraph";
+
+    requestTranslation("Shared paragraph", "zh", "agent-output");
+    requestTranslation(merged, "zh", "agent-output");
+    await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS);
+
+    await vi.waitFor(() => {
+      expect(statusOf("Shared paragraph")).toBe("complete");
+      expect(statusOf(merged)).toBe("complete");
+    });
+    expect(translationOf(merged)).toBe("共享\n\n其余");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Regression: one failed segment marked every message in its batch failed and erased them.
+  it("fails only the message whose request failed, without retrying a rejection", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setTranslationConfig(config);
+    let brokenRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (!String(init?.body).includes("Broken")) return sseResponse("你好");
+        brokenRequests += 1;
+        return new Response("denied", { status: 401 });
+      }),
+    );
+
+    requestTranslation("Kept", "zh", "agent-output");
+    requestTranslation("Broken", "zh", "agent-output");
+    await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS);
+
+    await vi.waitFor(() => {
+      expect(statusOf("Broken")).toBe("failed");
+      expect(statusOf("Kept")).toBe("complete");
+    });
+    expect(translationOf("Kept")).toBe("你好");
+    await vi.advanceTimersByTimeAsync(RETRY_WINDOW_MS);
+    expect(brokenRequests).toBe(1);
+  });
+
+  it("retries a request that dropped on the network", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setTranslationConfig(config);
+    const fetchMock = vi
+      .fn(async (_url: string, _init?: RequestInit) => sseResponse("重试成功"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    requestTranslation("Flaky network", "zh", "agent-output");
+    await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(statusOf("Flaky network")).toBe("pending");
+    await vi.advanceTimersByTimeAsync(RETRY_WINDOW_MS);
+
+    await vi.waitFor(() => expect(statusOf("Flaky network")).toBe("complete"));
+    expect(translationOf("Flaky network")).toBe("重试成功");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after repeated network failures", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setTranslationConfig(config);
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    requestTranslation("Offline", "zh", "agent-output");
+    await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS + RETRY_WINDOW_MS);
+
+    await vi.waitFor(() => expect(statusOf("Offline")).toBe("failed"));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("prompt originals", () => {
