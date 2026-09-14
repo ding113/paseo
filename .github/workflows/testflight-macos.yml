@@ -27,9 +27,18 @@ concurrency:
 
 jobs:
   testflight:
-    name: Build Apple Silicon Mac App Store package
+    name: Build Apple Silicon Mac App Store package (${{ matrix.environment }})
     runs-on: macos-26
     timeout-minutes: 90
+    strategy:
+      # One job per Apple Developer account. Each environment holds that account's variables and
+      # secrets under the names below. One account failing must not cancel the other's upload.
+      fail-fast: false
+      matrix:
+        environment: [testflight-primary, testflight-secondary]
+    environment:
+      name: ${{ matrix.environment }}
+      deployment: false
     env:
       ASC_KEY_TYPE: team
       ASC_KEY_ID: ${{ vars.APPSTORE_API_KEY_ID }}
@@ -120,16 +129,6 @@ jobs:
             exit 1
           fi
 
-          if [[ "$APP_BUNDLE_ID" != "io.github.ding113.paseo" ]]; then
-            echo "Unexpected Bundle ID: $APP_BUNDLE_ID"
-            exit 1
-          fi
-
-          if [[ "$APPLE_TEAM_ID" != "BHQTZC28AQ" ]]; then
-            echo "Unexpected Apple Team ID: $APPLE_TEAM_ID"
-            exit 1
-          fi
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -192,8 +191,8 @@ jobs:
 
           identities="$(security find-identity -v -p basic)"
           printf '%s\n' "$identities"
-          grep -q 'Apple Distribution:' <<<"$identities"
-          grep -q '3rd Party Mac Developer Installer:' <<<"$identities"
+          grep -q "Apple Distribution: .* ($APPLE_TEAM_ID)" <<<"$identities"
+          grep -q "3rd Party Mac Developer Installer: .* ($APPLE_TEAM_ID)" <<<"$identities"
 
       - name: Download and validate Mac App Store profile
         shell: bash
@@ -325,6 +324,17 @@ jobs:
           )"
           [[ "$sandbox_enabled" == "true" ]]
 
+          # The app group is added while signing; see the note in entitlements.mas.plist.
+          app_group="$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :com.apple.security.application-groups:0' \
+              "$RUNNER_TEMP/app-entitlements.plist"
+          )"
+          if [[ "$app_group" != "$APPLE_TEAM_ID.$APP_BUNDLE_ID" ]]; then
+            echo "Signed app group mismatch: $app_group"
+            exit 1
+          fi
+
           test -f "$app_path/Contents/embedded.provisionprofile"
           pkgutil --check-signature "$pkg_path"
 
@@ -334,7 +344,7 @@ jobs:
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: paseo-macos-testflight-${{ steps.build.outputs.build_number }}
+          name: paseo-macos-${{ matrix.environment }}-${{ steps.build.outputs.build_number }}
           path: ${{ steps.package.outputs.pkg_path }}
           if-no-files-found: error
           retention-days: 7
