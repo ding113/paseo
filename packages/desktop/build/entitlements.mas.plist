@@ -2,12 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- No com.apple.security.application-groups entry: @electron/osx-sign adds TEAM_ID.BUNDLE_ID
+       while signing, with the team from the provisioning profile, so one file serves every Apple
+       Developer account. -->
   <key>com.apple.security.app-sandbox</key>
   <true/>
-  <key>com.apple.security.application-groups</key>
-  <array>
-    <string>BHQTZC28AQ.io.github.ding113.paseo</string>
-  </array>
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
