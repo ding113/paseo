@@ -14,8 +14,8 @@ import { useAppSettings } from "@/hooks/use-settings";
 import { settingsStyles } from "@/styles/settings";
 import { SettingsSection } from "@/components/settings/headings/settings-section";
 import {
+  applyTranslationProvider,
   testTranslationConnection,
-  TRANSLATION_PROVIDER_DEFAULTS,
   type TranslationConfig,
   type TranslationProvider,
   type TranslationReasoningEffort,
@@ -147,6 +147,9 @@ export function TranslationSection() {
   const { settings, updateSettings } = useAppSettings();
   const config = settings.translation;
   const draftsRef = useRef<TranslationConfig>(config);
+  // Fields the user has typed into but not yet committed. A commit elsewhere in the section
+  // rewrites `config`, and without this the effect below would drop every other in-flight draft.
+  const dirtyRef = useRef<Set<TextKey>>(new Set());
   const testSequenceRef = useRef(0);
   const [testState, setTestState] = useState<"idle" | "pending" | "success" | "error">("idle");
   const [testError, setTestError] = useState("");
@@ -161,7 +164,10 @@ export function TranslationSection() {
   );
 
   useEffect(() => {
-    draftsRef.current = config;
+    const drafts = draftsRef.current;
+    const next = { ...config };
+    for (const key of dirtyRef.current) next[key] = drafts[key];
+    draftsRef.current = next;
   }, [config]);
 
   const handleEnabledChange = useCallback(
@@ -176,6 +182,7 @@ export function TranslationSection() {
   const handleCommit = useCallback(
     (key: TextKey, next: string) => {
       const value = next.trim();
+      dirtyRef.current.delete(key);
       if (value === config[key]) return;
       const translation = { ...draftsRef.current, [key]: value };
       draftsRef.current = translation;
@@ -186,17 +193,14 @@ export function TranslationSection() {
 
   const handleDraft = useCallback((key: TextKey, value: string) => {
     draftsRef.current = { ...draftsRef.current, [key]: value };
+    dirtyRef.current.add(key);
     testSequenceRef.current += 1;
     setTestState("idle");
   }, []);
 
   const handleProviderChange = useCallback(
     (provider: TranslationProvider) => {
-      const next = {
-        ...draftsRef.current,
-        provider,
-        ...TRANSLATION_PROVIDER_DEFAULTS[provider],
-      };
+      const next = applyTranslationProvider(draftsRef.current, provider);
       draftsRef.current = next;
       testSequenceRef.current += 1;
       setTestState("idle");

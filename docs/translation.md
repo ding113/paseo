@@ -116,19 +116,28 @@ Three consequences fall out of that instruction, and none of them are negotiable
   (`zh-CN`, `pt-BR`) onto the abbreviations it lists.
 
 A supported language is not automatically a working one. Hy-MT2 lists `繁体中文`, but the
-Tencent provider on OpenRouter answers that target with `content: null` and counts its whole
-output as reasoning tokens, while `中文` and `English` work — so Traditional Chinese falls back
-to the original text there. Check a target end to end before assuming the card's table
-matches your provider.
+Tencent provider on OpenRouter answers that target with `content: null` and counts its whole output
+as reasoning tokens. Endpoints in the DeepSeek shape do the same for any reasoning model. The whole
+completion is there, in `reasoning_content`, so the client reads it back when the text stream ran
+dry and no effort was requested — under an explicit effort the reasoning is a real thought trace
+and rendering it as the translation would be worse than failing. Check a target end to end before
+assuming the card's table matches your provider.
 
 Sampling follows the card's 30B-A3B block. Its `top_k: -1` and `repetition_penalty: 1.0` are
 "disabled" values, so they are omitted rather than sent: they change nothing, they are not
 in the OpenAI schema, and some gateways reject a negative `top_k`.
 
 The default endpoint is `https://openrouter.ai/api/v1` and the default model is
-`tencent/hy-mt2-30b-a3b`. Provider-specific reasoning controls map the common low/medium/high
-setting to each provider's native option. Reasoning events and `<think>` / `<thinking>` tagged
-text are removed before the translation stream reaches the UI. The settings page's connection
+`tencent/hy-mt2-30b-a3b`. Changing provider moves the endpoint and model to the new provider's
+defaults only while they still hold the old provider's — once either has been typed into, it
+survives the switch, because the picker is also how a mistaken choice gets corrected
+(`applyTranslationProvider`). Anthropic is reached with
+`anthropic-dangerous-direct-browser-access`: every surface that translates is a browser context,
+and the Messages API rejects those at the CORS preflight without it. Provider-specific reasoning controls map the common low/medium/high
+setting to each provider's native option. Reasoning events are removed before the translation stream reaches the UI, and `<think>` /
+`<thinking>` spans are stripped from the accumulated text by `stripReasoningTags` rather than by the
+SDK's `extractReasoningMiddleware`: that middleware buffers a trailing fragment that could still
+become an opening tag and never flushes it, so a reply ending in `<` lost its tail. The settings page's connection
 test consumes the same real streaming path while remaining usable when translation is disabled.
 
 ## Agent output is also plain language
@@ -167,6 +176,11 @@ a browser's bare "Failed to fetch", a stream cut short, or the deadline, so the 
 those twice, after 1s and 3s. A rejection, a truncated or empty reply, and a request the SDK
 already gave up on fail at once. A request that still fails fails only its own message; the
 messages dispatched with it keep streaming and commit on their own.
+
+A failure names what the provider said. Only an OpenAI-shaped error body reaches the SDK's own
+message, so Anthropic, Google, and any gateway with its own error shape would otherwise surface as a
+bare status code; the client reads `responseBody` for the message and reports the URL it called,
+which is also how you tell whether a base URL took effect.
 
 A failed job stays failed for the session, because retrying on every render turns a bad
 endpoint into an unbounded request loop. Changing the endpoint, key, model, or either

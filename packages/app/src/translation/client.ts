@@ -4,10 +4,8 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
   APICallError,
-  extractReasoningMiddleware,
   RetryError,
   streamText,
-  wrapLanguageModel,
   type LanguageModel,
   type ProviderMetadata,
 } from "ai";
@@ -47,6 +45,28 @@ export const TRANSLATION_PROVIDER_DEFAULTS: Record<
     model: "gemini-2.5-flash",
   },
 };
+
+/**
+ * Apply a provider change to a config.
+ *
+ * The endpoint and model follow the new provider only while they still hold the old provider's
+ * defaults. Once someone has typed their own gateway URL or model name, switching provider keeps
+ * it: the picker is also how you correct a mistaken choice, and overwriting both fields made that
+ * round trip cost the endpoint and the model every time.
+ */
+export function applyTranslationProvider(
+  config: TranslationConfig,
+  provider: TranslationProvider,
+): TranslationConfig {
+  const outgoing = TRANSLATION_PROVIDER_DEFAULTS[config.provider];
+  const incoming = TRANSLATION_PROVIDER_DEFAULTS[provider];
+  return {
+    ...config,
+    provider,
+    baseUrl: config.baseUrl.trim() === outgoing.baseUrl ? incoming.baseUrl : config.baseUrl,
+    model: config.model.trim() === outgoing.model ? incoming.model : config.model,
+  };
+}
 
 export const DEFAULT_TRANSLATION_CONFIG: TranslationConfig = {
   enabled: false,
@@ -185,27 +205,53 @@ function providerOptions(config: TranslationConfig): ProviderMetadata | undefine
 function createTranslationModel(config: TranslationConfig): LanguageModel {
   const baseURL = normalizeBaseUrl(config.baseUrl);
   const apiKey = config.apiKey.trim();
-  let model: LanguageModel;
+  const model = config.model.trim();
   switch (config.provider) {
     case "openai":
-      model = createOpenAI({ baseURL, apiKey }).chat(config.model.trim());
-      break;
+      return createOpenAI({ baseURL, apiKey }).chat(model);
     case "anthropic":
-      model = createAnthropic({ baseURL, apiKey })(config.model.trim());
-      break;
+      // Every Paseo surface that translates is a browser context — Expo web, the Electron
+      // renderer, and React Native's fetch all send an Origin. The Messages API rejects those at
+      // the CORS preflight with `authentication_error` unless the caller opts in by name, and the
+      // provider package does not send the header itself.
+      return createAnthropic({
+        baseURL,
+        apiKey,
+        headers: { "anthropic-dangerous-direct-browser-access": "true" },
+      })(model);
     case "google":
-      model = createGoogleGenerativeAI({ baseURL, apiKey })(config.model.trim());
-      break;
+      return createGoogleGenerativeAI({ baseURL, apiKey })(model);
     default:
-      model = createOpenAICompatible({ name: "translation", baseURL, apiKey })(config.model.trim());
+      return createOpenAICompatible({ name: "translation", baseURL, apiKey })(model);
   }
-  return wrapLanguageModel({
-    model,
-    middleware: [
-      extractReasoningMiddleware({ tagName: "think" }),
-      extractReasoningMiddleware({ tagName: "thinking" }),
-    ],
-  });
+}
+
+const REASONING_TAGS = ["think", "thinking"] as const;
+
+// A suffix that could still grow into one of the opening tags: `<`, `<t`, ... `<thinking`.
+const PARTIAL_OPENING_TAG = /<(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?$/;
+
+/**
+ * Strip `<think>` / `<thinking>` spans from model text.
+ *
+ * This replaces the AI SDK's `extractReasoningMiddleware`, which buffers any trailing text that
+ * could still become an opening tag and has no `flush`: a reply ending in `<`, `<th`, or `<thin`
+ * loses that tail for good. Translations of technical prose end in `<` often enough to matter.
+ * The accumulated text is already in hand here, so strip the tags from that instead.
+ *
+ * An unclosed opening tag hides everything after it, which is what a reasoning block looks like
+ * while it streams. `partial` additionally hides a trailing fragment that has not yet resolved
+ * into a tag, so a live block does not flash `<thin` before the rest of the tag arrives; the
+ * settled text keeps it, because by then it is ordinary text.
+ */
+export function stripReasoningTags(text: string, options: { partial?: boolean } = {}): string {
+  let stripped = text;
+  for (const tag of REASONING_TAGS) {
+    stripped = stripped
+      .replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g"), "")
+      .replace(new RegExp(`<${tag}>[\\s\\S]*$`), "");
+  }
+  return options.partial ? stripped.replace(PARTIAL_OPENING_TAG, "") : stripped;
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -242,21 +288,96 @@ export class TranslationError extends Error {
   }
 }
 
+const UPSTREAM_BODY_LIMIT = 600;
+
+/**
+ * Pull the human-readable reason out of an error response body.
+ *
+ * The SDK only parses a body that matches the provider package's own error schema, and puts that
+ * into `APICallError.message`. Anthropic, Google, and every OpenAI-compatible gateway that answers
+ * in its own shape leave the message generic and the real reason — a bad model id, a disabled key,
+ * a region block — only in the raw body.
+ */
+function upstreamDetail(responseBody: string | undefined): string | null {
+  const body = responseBody?.trim();
+  if (!body) return null;
+  try {
+    const message = findErrorMessage(JSON.parse(body));
+    if (message) return message;
+  } catch {
+    // Not JSON. A gateway's plain-text or HTML error still names the failure.
+  }
+  return body.length > UPSTREAM_BODY_LIMIT ? `${body.slice(0, UPSTREAM_BODY_LIMIT)}…` : body;
+}
+
+function findErrorMessage(value: unknown, depth = 0): string | null {
+  if (typeof value === "string") return value.trim() || null;
+  if (depth > 4 || typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "error", "error_msg", "detail", "reason", "data"]) {
+    if (!(key in record)) continue;
+    const found = findErrorMessage(record[key], depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function describeApiCallError(error: APICallError): string {
+  const parts: string[] = [];
+  if (error.statusCode !== undefined) parts.push(`HTTP ${error.statusCode}`);
+  // The resolved URL answers "did my base URL actually take effect" without a rebuild.
+  if (error.url) parts.push(error.url);
+  const own = error.message.trim();
+  const upstream = upstreamDetail(error.responseBody);
+  if (upstream && own.includes(upstream)) parts.push(own);
+  else if (upstream && upstream.includes(own)) parts.push(upstream);
+  else parts.push(...[own, upstream].filter((part): part is string => Boolean(part)));
+  return parts.join(" — ");
+}
+
+function describeError(error: unknown): string {
+  if (APICallError.isInstance(error)) return describeApiCallError(error);
+  if (error instanceof Error) return error.message.trim();
+  return "";
+}
+
 function toTranslationError(error: unknown): TranslationError {
   if (error instanceof TranslationError) return error;
-  const status =
-    APICallError.isInstance(error) && error.statusCode !== undefined ? ` ${error.statusCode}` : "";
-  const message = error instanceof Error ? error.message.trim() : "";
-  return new TranslationError(
-    `Translation request failed${status}${message ? `: ${message}` : ""}`,
-    {
-      // Rate limits and overloads were already retried inside the SDK, and any other API error is a
-      // rejection. What is left — a dropped connection, a stream cut short, a timeout — may succeed
-      // on another attempt.
-      retryable: !APICallError.isInstance(error) && !RetryError.isInstance(error),
-      cause: error,
-    },
-  );
+  const detail = describeError(error);
+  return new TranslationError(`Translation request failed${detail ? `: ${detail}` : ""}`, {
+    // Rate limits and overloads were already retried inside the SDK, and any other API error is a
+    // rejection. What is left — a dropped connection, a stream cut short, a timeout — may succeed
+    // on another attempt.
+    retryable: !APICallError.isInstance(error) && !RetryError.isInstance(error),
+    cause: error,
+  });
+}
+
+/**
+ * Some gateways answer with the whole completion in `reasoning_content` and `content: null`.
+ * OpenRouter's Tencent provider does it for 繁体中文, and DeepSeek-shaped endpoints do it for any
+ * reasoning model. The AI SDK routes that to the reasoning stream, so `textStream` runs dry and a
+ * finished, usable translation was being thrown away as an empty response.
+ *
+ * Recover it only when Paseo did not ask for reasoning. Under an explicit effort a reply that is
+ * all reasoning and no content is a genuine thought trace, and rendering that as the translation
+ * would be worse than failing.
+ */
+function recoverReasoningOnlyText(
+  reasoningText: string | undefined,
+  config: TranslationConfig,
+): string | null {
+  if (config.reasoningEffort !== "default") return null;
+  const recovered = stripReasoningTags(reasoningText ?? "").trim();
+  return recovered.length > 0 ? recovered : null;
+}
+
+function emptyResponseMessage(finishReason: string, reasoningText: string | undefined): string {
+  const reasoningLength = reasoningText?.trim().length ?? 0;
+  if (reasoningLength > 0) {
+    return `Translation response carried no content: the provider sent ${reasoningLength} characters of reasoning and an empty message (finish reason: ${finishReason})`;
+  }
+  return `Translation response was empty (finish reason: ${finishReason})`;
 }
 
 export async function streamTranslation(input: {
@@ -289,23 +410,36 @@ export async function streamTranslation(input: {
         streamError = error;
       },
     });
-    let translated = "";
+    let raw = "";
+    let published = "";
     for await (const delta of result.textStream) {
-      translated += delta;
-      input.onText?.(translated);
+      raw += delta;
+      const next = stripReasoningTags(raw, { partial: true });
+      if (next === published) continue;
+      published = next;
+      input.onText?.(published);
     }
     if (streamError) throw streamError;
-    if ((await result.finishReason) === "length") {
+    const finishReason = await result.finishReason;
+    if (finishReason === "length") {
       throw new TranslationError("Translation response was truncated at the model's output limit", {
         retryable: false,
       });
     }
-    const trimmed = translated.trim();
-    if (trimmed.length === 0) {
-      throw new TranslationError("Translation response was empty", { retryable: false });
+    const settled = stripReasoningTags(raw).trim();
+    if (settled.length > 0) {
+      if (settled !== published) input.onText?.(settled);
+      return settled;
     }
-    if (trimmed !== translated) input.onText?.(trimmed);
-    return trimmed;
+    const reasoningText = await result.reasoningText;
+    const recovered = recoverReasoningOnlyText(reasoningText, input.config);
+    if (!recovered) {
+      throw new TranslationError(emptyResponseMessage(finishReason, reasoningText), {
+        retryable: false,
+      });
+    }
+    input.onText?.(recovered);
+    return recovered;
   } catch (error) {
     throw toTranslationError(streamError ?? error);
   } finally {
