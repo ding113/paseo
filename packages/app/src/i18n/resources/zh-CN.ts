@@ -1502,6 +1502,18 @@ export const zhCN: TranslationResources = {
     },
   },
   onboarding: {
+    sandbox: {
+      title: "在沙箱外部署守护进程",
+      description:
+        "这份 Paseo 来自 App Store，macOS 会把它放在沙箱里运行。内置守护进程看不到这台 Mac 上安装的 Claude Code、Codex 或其他任何 agent，任何权限设置都无法改变这一点。请在沙箱外安装守护进程，然后让 Paseo 连接它。",
+      commandsLabel: "在终端里执行",
+      agentPromptLabel: "给 coding agent 的指令",
+      agentPromptHint: "终端里已经开着一个 agent？复制这段指令粘贴给它，就不用自己敲命令了。",
+      connectHint: "守护进程跑起来之后，连接 {{address}}。",
+      copyCommands: "复制命令",
+      copyAgentPrompt: "复制指令",
+      connect: "连接",
+    },
     title: "欢迎使用 Paseo",
     subtitle: "连接你的电脑即可开始",
     actions: {

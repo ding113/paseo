@@ -1568,6 +1568,19 @@ export const fr: TranslationResources = {
     },
   },
   onboarding: {
+    sandbox: {
+      title: "Installer le daemon hors du bac à sable",
+      description:
+        "Cette copie de Paseo vient de l'App Store, donc macOS l'exécute dans un bac à sable. Le daemon fourni ne voit ni Claude Code, ni Codex, ni aucun autre agent installé sur ce Mac, et aucun réglage d'autorisation n'y change quoi que ce soit. Installez le daemon hors du bac à sable, puis connectez-y Paseo.",
+      commandsLabel: "À exécuter dans le Terminal",
+      agentPromptLabel: "Instructions pour un coding agent",
+      agentPromptHint:
+        "Un agent est déjà ouvert dans un terminal ? Copiez les instructions et collez-les là plutôt que de taper les commandes vous-même.",
+      connectHint: "Une fois le daemon lancé, connectez-vous à {{address}}.",
+      copyCommands: "Copier les commandes",
+      copyAgentPrompt: "Copier les instructions",
+      connect: "Se connecter",
+    },
     title: "Bienvenue surPaseo",
     subtitle: "Connectez votre ordinateur pour commencer",
     actions: {

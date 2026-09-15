@@ -1519,6 +1519,19 @@ export const ar: TranslationResources = {
     },
   },
   onboarding: {
+    sandbox: {
+      title: "ثبّت الخفي خارج بيئة العزل",
+      description:
+        "هذه النسخة من Paseo جاءت من App Store، لذا يشغّلها macOS داخل بيئة عزل. الخفي المضمّن لا يرى Claude Code ولا Codex ولا أي agent آخر مثبّت على هذا الـ Mac، ولا يغيّر ذلك أي إعداد للأذونات. ثبّت الخفي خارج بيئة العزل ثم اربط به Paseo.",
+      commandsLabel: "نفّذ هذا في الطرفية",
+      agentPromptLabel: "تعليمات لوكيل برمجي",
+      agentPromptHint:
+        "هل لديك agent مفتوح في الطرفية بالفعل؟ انسخ التعليمات والصقها هناك بدلاً من تنفيذ الأوامر بنفسك.",
+      connectHint: "بعد تشغيل الخفي، اتصل بـ {{address}}.",
+      copyCommands: "نسخ الأوامر",
+      copyAgentPrompt: "نسخ التعليمات",
+      connect: "اتصال",
+    },
     title: "مرحبا بكم في Paseo",
     subtitle: "قم بتوصيل جهاز الكمبيوتر الخاص بك للبدء",
     actions: {

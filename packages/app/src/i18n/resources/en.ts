@@ -1545,6 +1545,19 @@ export const en = {
     },
   },
   onboarding: {
+    sandbox: {
+      title: "Set up the daemon outside the sandbox",
+      description:
+        "This copy of Paseo came from the App Store, so macOS runs it in a sandbox. The bundled daemon cannot see Claude Code, Codex, or any other agent installed on this Mac, and no permission setting changes that. Install the daemon outside the sandbox, then connect Paseo to it.",
+      commandsLabel: "Run these in Terminal",
+      agentPromptLabel: "Instructions for a coding agent",
+      agentPromptHint:
+        "Already have an agent open in a terminal? Copy the instructions and paste them there instead of running the commands yourself.",
+      connectHint: "Once the daemon is running, connect to {{address}}.",
+      copyCommands: "Copy commands",
+      copyAgentPrompt: "Copy instructions",
+      connect: "Connect",
+    },
     title: "Welcome to Paseo",
     subtitle: "Connect your computer to get started",
     actions: {

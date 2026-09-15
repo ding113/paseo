@@ -26,6 +26,8 @@ import { openExternalUrl } from "@/utils/open-external-url";
 import { isFdroidBuild } from "@/constants/build-profile";
 import { isWeb, isNative } from "@/constants/platform";
 import { isElectronRuntime } from "@/desktop/host";
+import { getAppSandboxStatus } from "@/desktop/daemon/app-sandbox";
+import { SandboxDaemonSetup } from "./sandbox-daemon-setup";
 
 interface WelcomeAction {
   key: "scan-qr" | "direct-connection" | "remote-ssh" | "paste-pairing-link";
@@ -71,6 +73,11 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[2],
     marginBottom: theme.spacing[12],
+  },
+  sandboxBlock: {
+    width: "100%",
+    alignItems: "center",
+    marginBottom: theme.spacing[6],
   },
   actions: {
     width: "100%",
@@ -178,6 +185,20 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
   const [isPasteLinkOpen, setIsPasteLinkOpen] = useState(false);
   const hosts = useHosts();
   const anyOnlineServerId = useAnyHostOnline(hosts.map((h) => h.serverId));
+  // The App Store build cannot start a useful built-in daemon, so onboarding has to say so before
+  // offering the connection methods rather than after the user finds nothing to connect to.
+  const [isSandboxed, setIsSandboxed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAppSandboxStatus().then((status) => {
+      if (!cancelled) setIsSandboxed(status.sandboxed);
+      return status;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!anyOnlineServerId) return;
@@ -297,6 +318,12 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
               </Pressable>
             ) : null}
           </View>
+
+          {isSandboxed ? (
+            <View style={styles.sandboxBlock}>
+              <SandboxDaemonSetup onConnect={handleOpenDirect} />
+            </View>
+          ) : null}
 
           <View style={styles.actions}>
             {actions.map((action) => (

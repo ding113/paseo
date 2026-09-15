@@ -44,6 +44,7 @@ import {
 import type { DesktopSettings } from "../settings/desktop-settings.js";
 import { getDesktopSettingsStore } from "../settings/desktop-settings-electron.js";
 import { isRunningUnderARM64Translation } from "../system/arm64-translation.js";
+import { getAppSandboxStatus } from "../system/app-sandbox.js";
 import { describeSandbox } from "../diagnostics/sandbox.js";
 import { getDesktopAppLogs } from "../diagnostics/app-logs.js";
 import { getDesktopUpdaterDiagnostics } from "../diagnostics/updater.js";
@@ -269,8 +270,25 @@ function assertBuiltInDaemonManagementEnabled(settings: DesktopSettings): void {
   }
 }
 
+/**
+ * Refuse to launch the bundled daemon inside the macOS App Sandbox.
+ *
+ * It would start and look healthy while seeing none of the user's coding agents, and it would take
+ * port 6767 from the daemon they install outside the sandbox to fix that. Failing here keeps the
+ * port free and gives the renderer something to explain.
+ */
+function assertBuiltInDaemonCanSeeTheUsersAgents(): void {
+  if (!getAppSandboxStatus().sandboxed) return;
+  throw new Error(
+    "Paseo is running inside the macOS App Sandbox, where the bundled daemon cannot reach the " +
+      "coding agents installed on this Mac. Install the daemon outside the sandbox " +
+      "(npm install -g @getpaseo/cli, then paseo daemon start) and connect to 127.0.0.1:6767.",
+  );
+}
+
 async function startDaemon(): Promise<DesktopDaemonStatus> {
   assertBuiltInDaemonManagementEnabled(await getDesktopSettingsStore().get());
+  assertBuiltInDaemonCanSeeTheUsersAgents();
 
   const current = await resolveDesktopDaemonStatus();
   logDesktopDaemonLifecycle("initial status check before start", {
@@ -409,6 +427,7 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
       ),
     restart_desktop_daemon: () => restartDaemon(),
     desktop_daemon_logs: () => getDaemonLogs(),
+    desktop_app_sandbox_status: () => getAppSandboxStatus(),
     desktop_sandbox_diagnostics: () =>
       describeSandbox({
         disabled: app.commandLine.hasSwitch("no-sandbox"),

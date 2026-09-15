@@ -1564,6 +1564,19 @@ export const es: TranslationResources = {
     },
   },
   onboarding: {
+    sandbox: {
+      title: "Instala el daemon fuera del sandbox",
+      description:
+        "Esta copia de Paseo viene de la App Store, así que macOS la ejecuta en un sandbox. El daemon incluido no puede ver Claude Code, Codex ni ningún otro agent instalado en este Mac, y ningún ajuste de permisos lo cambia. Instala el daemon fuera del sandbox y conecta Paseo a él.",
+      commandsLabel: "Ejecuta esto en la Terminal",
+      agentPromptLabel: "Instrucciones para un coding agent",
+      agentPromptHint:
+        "¿Ya tienes un agent abierto en una terminal? Copia las instrucciones y pégalas ahí en lugar de ejecutar los comandos tú.",
+      connectHint: "Cuando el daemon esté en marcha, conéctate a {{address}}.",
+      copyCommands: "Copiar comandos",
+      copyAgentPrompt: "Copiar instrucciones",
+      connect: "Conectar",
+    },
     title: "Bienvenido aPaseo",
     subtitle: "Conecte su computadora para comenzar",
     actions: {

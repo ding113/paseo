@@ -1535,6 +1535,19 @@ export const ja: TranslationResources = {
     },
   },
   onboarding: {
+    sandbox: {
+      title: "サンドボックス外にデーモンを用意する",
+      description:
+        "この Paseo は App Store 版のため、macOS がサンドボックス内で実行します。同梱のデーモンからはこの Mac に入っている Claude Code や Codex などの agent が一切見えず、権限設定を変えても解決しません。サンドボックスの外にデーモンをインストールし、Paseo から接続してください。",
+      commandsLabel: "ターミナルで実行",
+      agentPromptLabel: "coding agent 向けの指示",
+      agentPromptHint:
+        "すでにターミナルで agent を開いていますか。自分でコマンドを打つ代わりに、この指示をコピーして貼り付けてください。",
+      connectHint: "デーモンが起動したら {{address}} に接続します。",
+      copyCommands: "コマンドをコピー",
+      copyAgentPrompt: "指示をコピー",
+      connect: "接続",
+    },
     title: "Paseoへようこそ",
     subtitle: "始めるにはコンピューターに接続してください",
     actions: {

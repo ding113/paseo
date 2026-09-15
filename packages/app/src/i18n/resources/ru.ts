@@ -1547,6 +1547,19 @@ export const ru: TranslationResources = {
     },
   },
   onboarding: {
+    sandbox: {
+      title: "Установите демон вне песочницы",
+      description:
+        "Эта копия Paseo из App Store, поэтому macOS запускает её в песочнице. Встроенный демон не видит ни Claude Code, ни Codex, ни любой другой agent, установленный на этом Mac, и настройки разрешений этого не меняют. Установите демон вне песочницы и подключите к нему Paseo.",
+      commandsLabel: "Выполните в терминале",
+      agentPromptLabel: "Инструкции для coding agent",
+      agentPromptHint:
+        "В терминале уже открыт agent? Скопируйте инструкции и вставьте их туда, вместо того чтобы вводить команды самостоятельно.",
+      connectHint: "Когда демон запустится, подключитесь к {{address}}.",
+      copyCommands: "Копировать команды",
+      copyAgentPrompt: "Копировать инструкции",
+      connect: "Подключиться",
+    },
     title: "Добро пожаловать в Paseo",
     subtitle: "Подключите компьютер, чтобы начать",
     actions: {

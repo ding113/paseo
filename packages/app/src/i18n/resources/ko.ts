@@ -1529,6 +1529,19 @@ export const ko: TranslationResources = {
     },
   },
   onboarding: {
+    sandbox: {
+      title: "샌드박스 밖에 데몬 설치",
+      description:
+        "이 Paseo는 App Store에서 받은 버전이라 macOS가 샌드박스 안에서 실행합니다. 내장 데몬은 이 Mac에 설치된 Claude Code, Codex 등 어떤 agent도 볼 수 없으며 권한 설정으로는 해결되지 않습니다. 샌드박스 밖에 데몬을 설치한 뒤 Paseo를 연결하세요.",
+      commandsLabel: "터미널에서 실행",
+      agentPromptLabel: "coding agent에게 줄 지시문",
+      agentPromptHint:
+        "터미널에 이미 agent가 떠 있나요? 직접 명령을 입력하는 대신 이 지시문을 복사해 붙여넣으세요.",
+      connectHint: "데몬이 실행되면 {{address}}로 연결하세요.",
+      copyCommands: "명령 복사",
+      copyAgentPrompt: "지시문 복사",
+      connect: "연결",
+    },
     title: "Paseo에 오신 것을 환영합니다",
     subtitle: "시작하려면 컴퓨터를 연결하세요",
     actions: {
