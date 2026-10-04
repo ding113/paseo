@@ -1,3 +1,4 @@
+import { ASSISTANT_IMAGE_DEFAULT_ASPECT_RATIO } from "@/utils/assistant-image-metadata";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { TaskListRow } from "@/components/task-list-row";
 import {
@@ -487,6 +488,8 @@ function UserMessageImagePill({ image, onOpen, accessibilityLabel }: UserMessage
   );
 }
 
+const MESSAGE_TEXT_DATASET = { messageText: "true" };
+
 export const UserMessage = memo(function UserMessage({
   serverId,
   agentId,
@@ -633,7 +636,7 @@ export const UserMessage = memo(function UserMessage({
             </View>
           ) : null}
           {hasText ? (
-            <Text selectable style={userMessageStylesheet.text}>
+            <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
               {displayMessage}
             </Text>
           ) : null}
@@ -834,6 +837,7 @@ export const LiveElapsed = memo(function LiveElapsed({
 });
 
 interface AssistantMessageProps {
+  renderFullContent?: boolean;
   occurrenceKey: string;
   message: string;
   timestamp: number;
@@ -917,8 +921,6 @@ export const assistantMessageStylesheet = StyleSheet.create((theme) => ({
   },
 }));
 
-const ASSISTANT_IMAGE_MIN_HEIGHT = 160;
-
 function AssistantMarkdownImage({
   source,
   occurrenceKey,
@@ -963,11 +965,9 @@ function AssistantMarkdownImage({
     [containerStyle],
   );
   const imageSizeStyle = useMemo<ViewStyle>(() => {
-    if (aspectRatio) {
-      return { aspectRatio };
-    }
-    return { height: ASSISTANT_IMAGE_MIN_HEIGHT };
-  }, [aspectRatio]);
+    if (image.status === "failed") return { height: 160 };
+    return { aspectRatio: aspectRatio ?? ASSISTANT_IMAGE_DEFAULT_ASPECT_RATIO };
+  }, [aspectRatio, image.status]);
   const surfaceStyle = useMemo<StyleProp<ViewStyle>>(
     () => [assistantMessageStylesheet.imageSurface, imageSizeStyle],
     [imageSizeStyle],
@@ -985,10 +985,10 @@ function AssistantMarkdownImage({
     () => [
       assistantMessageStylesheet.imageFrame,
       containerStyle,
-      { height: ASSISTANT_IMAGE_MIN_HEIGHT },
+      imageSizeStyle,
       assistantMessageStylesheet.imageState,
     ],
-    [containerStyle],
+    [containerStyle, imageSizeStyle],
   );
 
   if (image.status === "failed") {
@@ -1596,6 +1596,7 @@ function MarkdownListView({
 }
 
 export const AssistantMessage = memo(function AssistantMessage({
+  renderFullContent = false,
   occurrenceKey,
   message,
   timestamp: _timestamp,
@@ -1620,8 +1621,11 @@ export const AssistantMessage = memo(function AssistantMessage({
     displayedMessage = translated ?? "";
   }
   const renderedMessage = useMemo(
-    () => capAssistantMessageForRender(displayedMessage),
-    [displayedMessage],
+    () =>
+      renderFullContent
+        ? { text: displayedMessage, capped: false }
+        : capAssistantMessageForRender(displayedMessage),
+    [displayedMessage, renderFullContent],
   );
   const fullMessageByteLength = useMemo(
     () =>
@@ -1634,7 +1638,8 @@ export const AssistantMessage = memo(function AssistantMessage({
     renderedMessage.text,
     translation.status === "streaming" ? "streaming" : phase,
   );
-  const revealedMessage = translation.enabled ? renderedMessage.text : pacedMessage;
+  const revealedMessage =
+    renderFullContent || translation.enabled ? renderedMessage.text : pacedMessage;
   const isStreamingText = translation.status === "streaming" || phase === "streaming";
 
   const fileLinkActions = useAssistantFileLinkActions();
@@ -2093,8 +2098,12 @@ export const AssistantMessage = memo(function AssistantMessage({
   const revealDataSet = useMemo(
     () =>
       isRenderProfileEnabled()
-        ? { revealKey: occurrenceKey, revealLength: String(revealedMessage.length) }
-        : undefined,
+        ? {
+            ...MESSAGE_TEXT_DATASET,
+            revealKey: occurrenceKey,
+            revealLength: String(revealedMessage.length),
+          }
+        : MESSAGE_TEXT_DATASET,
     [occurrenceKey, revealedMessage.length],
   );
 

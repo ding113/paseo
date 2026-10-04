@@ -1,5 +1,5 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
 import { View, Text, Pressable, type PressableStateCallbackType } from "react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -9,6 +9,7 @@ import type { PendingPermission } from "@/types/shared";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
 import { isWeb } from "@/constants/platform";
 import { EditingTextInput as TextInput } from "@/components/ui/text-input";
+import type { EditingTextInputHandle } from "@/components/ui/text-input/types";
 import {
   areQuestionsAnswered,
   buildQuestionFormAnswers,
@@ -303,6 +304,7 @@ function QuestionNav({
 
 interface QuestionOtherInputProps {
   qIndex: number;
+  inputRef: RefObject<EditingTextInputHandle | null>;
   accessibilityLabel: string;
   value: string;
   placeholder: string;
@@ -313,6 +315,7 @@ interface QuestionOtherInputProps {
 
 function QuestionOtherInput({
   qIndex,
+  inputRef,
   accessibilityLabel,
   value,
   placeholder,
@@ -348,6 +351,7 @@ function QuestionOtherInput({
   );
   return (
     <TextInput
+      ref={inputRef}
       // @ts-expect-error - outlineStyle is web-only
       style={otherInputStyle}
       accessibilityLabel={accessibilityLabel}
@@ -365,6 +369,7 @@ function QuestionOtherInput({
 function useQuestionFormSelection(questions: QuestionFormQuestion[] | null) {
   const [selections, setSelections] = useState<Record<number, Set<number>>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
+  const otherInputRef = useRef<EditingTextInputHandle | null>(null);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
 
   const toggleOption = useCallback(
@@ -381,30 +386,41 @@ function useQuestionFormSelection(questions: QuestionFormQuestion[] | null) {
         next.add(optIndex);
       }
 
-      setSelections((previous) => ({ ...previous, [qIndex]: next }));
-      setOtherTexts((previous) => {
-        if (!previous[qIndex]) return previous;
-        const nextTexts = { ...previous };
-        delete nextTexts[qIndex];
-        return nextTexts;
-      });
+      setSelections((prev) => ({ ...prev, [qIndex]: next }));
+
+      // Single-select: an option and a custom answer replace each other, as in Claude Code.
+      // Multi-select keeps both. The editing surface owns its text and never replays state
+      // (docs/forms.md), so clearing state alone would leave stale text on screen that
+      // submit ignores; clear the surface explicitly.
+      if (!multiSelect && otherTexts[qIndex]) {
+        setOtherTexts((prev) => {
+          const nextTexts = { ...prev };
+          delete nextTexts[qIndex];
+          return nextTexts;
+        });
+        otherInputRef.current?.replaceText("");
+      }
 
       if (!multiSelect && next.size > 0 && qIndex === activeQuestionIndex && questions) {
         setActiveQuestionIndex(Math.min(qIndex + 1, questions.length - 1));
       }
     },
-    [activeQuestionIndex, questions, selections],
+    [activeQuestionIndex, otherTexts, questions, selections],
   );
 
-  const setOtherText = useCallback((qIndex: number, text: string) => {
-    setOtherTexts((previous) => ({ ...previous, [qIndex]: text }));
-    if (text.length > 0) {
-      setSelections((previous) => {
-        if (!previous[qIndex] || previous[qIndex].size === 0) return previous;
-        return { ...previous, [qIndex]: new Set<number>() };
-      });
-    }
-  }, []);
+  const setOtherText = useCallback(
+    (qIndex: number, text: string) => {
+      setOtherTexts((prev) => ({ ...prev, [qIndex]: text }));
+      const multiSelect = questions?.[qIndex]?.multiSelect ?? false;
+      if (!multiSelect && text.length > 0) {
+        setSelections((prev) => {
+          if (!prev[qIndex] || prev[qIndex].size === 0) return prev;
+          return { ...prev, [qIndex]: new Set<number>() };
+        });
+      }
+    },
+    [questions],
+  );
 
   const selectQuestion = useCallback((index: number) => setActiveQuestionIndex(index), []);
   return {
@@ -415,6 +431,7 @@ function useQuestionFormSelection(questions: QuestionFormQuestion[] | null) {
     setActiveQuestionIndex,
     setOtherText,
     toggleOption,
+    otherInputRef,
   };
 }
 
@@ -501,6 +518,7 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
     setActiveQuestionIndex,
     setOtherText,
     toggleOption,
+    otherInputRef,
   } = useQuestionFormSelection(questions);
 
   const allAnswered = areQuestionsAnswered(questions, selections, otherTexts);
@@ -666,6 +684,7 @@ export function QuestionFormCard({ permission, onRespond, isResponding }: Questi
           {showTextInput && displayActiveQuestion ? (
             <QuestionOtherInput
               qIndex={resolvedActiveQuestionIndex}
+              inputRef={otherInputRef}
               accessibilityLabel={displayActiveQuestion.question}
               value={otherText}
               placeholder={getQuestionInputPlaceholder({
